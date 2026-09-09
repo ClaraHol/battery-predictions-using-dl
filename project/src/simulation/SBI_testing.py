@@ -24,19 +24,20 @@ device = (
 
 Q_rated = 3      # Ah, matches Chen2020 nominal cell capacity
 current = -1.5   # A
-V_cut_lb = 2.5
+V_cut_lb = 3
 V_cut_ub = 4.2
 t_typ = np.abs(3600 * Q_rated / current)
 t_sim = np.abs(int(3700 * Q_rated / current))
-
-def t_normal(data): return data / t_typ
+print(t_sim)
+def t_normal(data): return data / t_sim
 def v_normal(data): return (data - V_cut_lb) / (V_cut_ub - V_cut_lb)
 
 # Pick 2 well-known, physically meaningful parameters to vary for the test
 param_names = [
-    "Negative electrode diffusivity [m2.s-1]",
-    "Positive electrode diffusivity [m2.s-1]",
+    "Negative particle diffusivity [m2.s-1]",
+    "Positive particle diffusivity [m2.s-1]",
 ]
+
 num_dim = len(param_names)
 
 # log10-uniform priors spanning a couple orders of magnitude around Chen2020 defaults
@@ -44,36 +45,46 @@ prior_min = torch.tensor([-15.0, -15.0])
 prior_max = torch.tensor([-12.0, -12.0])
 prior = utils.BoxUniform(low=prior_min, high=prior_max)
 
+
+
 base_params = pybamm.ParameterValues("Chen2020")
 
 def simulator(theta):
-    
-    parameter_values = base_params.copy()
-    for name, val in zip(param_names, theta):
-        parameter_values[name] = 10 ** val   # undo log10
 
-    model = pybamm.lithium_ion.SPMe()  # fast model for the test
+    neg_diff = float(10 ** theta[0])
+    pos_diff = float(10 ** theta[1])
 
-    model.events.append(
-        pybamm.Event(
-            "Minimum voltage limit",
-            model.variables["Terminal voltage [V]"] - V_cut_lb,
-            pybamm.EventType.TERMINATION,
-        )
+    parameter_values = pybamm.ParameterValues("Chen2020")
+    parameter_values.update(
+        {
+            "Negative particle diffusivity [m2.s-1]": float(10 ** theta[0]),
+            "Positive particle diffusivity [m2.s-1]": float(10 ** theta[1]),
+        }
     )
-    experiment = None
-    try:
-        print("simulating")
-        sim = pybamm.Simulation(model, parameter_values=parameter_values)
-        sol = sim.solve([0, t_sim])
-    except Exception:
-        print("entered exception")
-        num_points = 100
-        this_t = torch.linspace(0, t_sim, num_points)
-        this_v = torch.ones(num_points) * V_cut_lb + torch.normal(0, 0.005, size=(num_points,))
-        v_norm = v_normal(this_v)
-        t_norm = t_normal(this_t)
-        return torch.concatenate([t_norm, v_norm])
+
+    model = pybamm.lithium_ion.SPMe()
+    experiment = pybamm.Experiment([
+        f"Discharge at {abs(current)} A for {t_sim} seconds or until {V_cut_lb} V",
+    ])
+
+
+    # try:
+    print("simulating")
+    sim = pybamm.Simulation(model, experiment= experiment, parameter_values=parameter_values,
+                            solver=pybamm.IDAKLUSolver(rtol=1e-3, atol=1e-3))
+    sol = sim.solve(initial_soc=1.0)
+    print("termination:", sol.termination)
+    print("final voltage:", sol["Terminal voltage [V]"].entries[-1])
+    print("final time:", sol["Time [s]"].entries[-1])
+    # except Exception:
+    #     print("entered exception")
+    #     num_points = 100
+    #     this_t = torch.linspace(0, t_sim, num_points)
+    #     this_v = torch.ones(num_points) * V_cut_lb + torch.normal(0, 0.005, size=(num_points,))
+    #     v_norm = v_normal(this_v)
+    #     t_norm = t_normal(this_t)
+    #     print("ERRROR, something went wrong and the output is fake")
+    #     return torch.concatenate([t_norm, v_norm])
 
     Voltage = torch.Tensor(np.array(sol["Terminal voltage [V]"].entries))
     Time = torch.Tensor(np.array(sol["Time [s]"].entries))
