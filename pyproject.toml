@@ -9,4 +9,5 @@ dependencies = [
     "numpy>=2.5.2",
     "pybamm>=26.8.0.0",
     "sbi>=0.27.0",
+    "setuptools>=84.0.0",
 ]

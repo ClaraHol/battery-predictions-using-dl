@@ -2,8 +2,9 @@ import numpy as np
 import pybamm
 import torch
 from sbi import utils as utils
+
 from sbi.inference import simulate_for_sbi
-from sbi.neural_nets import posterior_nn  # new location
+from sbi.neural_nets import posterior_nn  
 from scipy.interpolate import interp1d
 
 from sbi.utils.user_input_checks import (
@@ -76,15 +77,7 @@ def simulator(theta):
     print("termination:", sol.termination)
     print("final voltage:", sol["Terminal voltage [V]"].entries[-1])
     print("final time:", sol["Time [s]"].entries[-1])
-    # except Exception:
-    #     print("entered exception")
-    #     num_points = 100
-    #     this_t = torch.linspace(0, t_sim, num_points)
-    #     this_v = torch.ones(num_points) * V_cut_lb + torch.normal(0, 0.005, size=(num_points,))
-    #     v_norm = v_normal(this_v)
-    #     t_norm = t_normal(this_t)
-    #     print("ERRROR, something went wrong and the output is fake")
-    #     return torch.concatenate([t_norm, v_norm])
+
 
     Voltage = torch.Tensor(np.array(sol["Terminal voltage [V]"].entries))
     Time = torch.Tensor(np.array(sol["Time [s]"].entries))
@@ -94,7 +87,7 @@ def simulator(theta):
     this_v = torch.Tensor(f(this_t)) + torch.normal(0, 0.005, size=(num_points,))
 
     v_norm = v_normal(this_v)
-    t_norm = t_normal(this_t)
+    t_norm = t_normal(this_t)   
 
     last_time = torch.tensor([Time[-1].item()], dtype=torch.float32)
     return torch.concatenate([last_time, v_norm])  # length-200, avoids the norm-collapse issue too

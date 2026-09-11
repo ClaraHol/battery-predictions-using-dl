@@ -1,6 +1,7 @@
 
 import pybamm
 import numpy as np
+import traceback
 
 def simulator(params, current, t_sim, V_cut_lb, V_cut_ub):
     # This is the base level simulator called by the SBI models during trainning
@@ -15,8 +16,16 @@ def simulator(params, current, t_sim, V_cut_lb, V_cut_ub):
     params["Current function [A]"] = current
     parameter_values = pybamm.ParameterValues(params)
 
+    # experiment = pybamm.Experiment([
+    #     f"Discharge at {abs(current)} A for {t_sim} seconds or until {V_cut_lb} or {V_cut_ub} V",
+    # ])
+
     experiment = pybamm.Experiment([
-        f"Discharge at {abs(current)} A for {t_sim} seconds or until {V_cut_lb} V or until {V_cut_ub} V",
+    pybamm.step.current(
+        abs(current),
+        duration=t_sim,
+        termination=[f"{V_cut_lb} V", f"{V_cut_ub} V"]
+    )
     ])
 
     solver = pybamm.IDAKLUSolver(rtol= 1e-3, atol= 1e-3)
@@ -33,8 +42,10 @@ def simulator(params, current, t_sim, V_cut_lb, V_cut_ub):
     t_eval = np.linspace(0, t_sim*3, num=1000)
 
     try:
-      sim.solve(t_eval=t_eval)
-      return sim.solution
-    except:
-      print('Extreme case error!')
-      return 'Extreme case error!'
+    #   sim.solve(t_eval=t_eval)
+        sim.solve()
+        return sim.solution
+    except Exception as e:
+        print('Extreme case error!', repr(e))
+        traceback.print_exc()
+        return 'Extreme case error!'

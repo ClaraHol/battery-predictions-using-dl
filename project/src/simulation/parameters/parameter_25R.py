@@ -228,8 +228,8 @@ def params_setting(params):
     ##### Material properties - electrode
     'Negative electrode exchange-current density [A.m-2]': anode_exchange_current_density,
     'Positive electrode exchange-current density [A.m-2]': cathode_exchange_current_density,
-    'Negative electrode diffusivity [m2.s-1]': anode_diffusivity,
-    'Positive electrode diffusivity [m2.s-1]': cathode_diffusivity,
+    'Negative particle diffusivity [m2.s-1]': anode_diffusivity,
+    'Positive particle diffusivity [m2.s-1]': cathode_diffusivity,
     'Negative electrode OCP [V]': anode_ocp,
     'Positive electrode OCP [V]': cathode_ocp,
     'Maximum concentration in negative electrode [mol.m-3]': Cs_max_n,
@@ -249,6 +249,7 @@ def params_setting(params):
     'Thermodynamic factor': 2, # WangCY-Nature
     ######################################################################
     'SEI resistivity [Ohm.m]': params[6]/(5e-9),
+    'Initial SEI thickness [m]': 5e-9, # The total thickness
     'Initial inner SEI thickness [m]': 2.5e-9,#2.5e-09
     'Initial outer SEI thickness [m]': 2.5e-9,#2.5e-09
     'Inner SEI partial molar volume [m3.mol-1]':0.1, ### useless but necessary
