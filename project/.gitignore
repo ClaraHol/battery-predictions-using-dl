@@ -58,6 +58,7 @@ target/
 
 # DotEnv configuration
 .env
+uv.lock
 
 # Database
 *.db
