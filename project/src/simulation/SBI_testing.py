@@ -1,5 +1,6 @@
 import numpy as np
-import pybamm
+import matplotlib.pyplot as plt
+from pathlib import Path
 import torch
 from sbi import utils as utils
 
@@ -14,6 +15,18 @@ from sbi.utils.user_input_checks import (
 )
 from sbi.inference import NPE, simulate_for_sbi
 from sbi.utils import BoxUniform
+from battery_simulator import simulator
+from parameters.parameter_25R import params_log, params_log_flag, params_setting
+
+import pickle
+import warnings
+import pybamm
+
+# Suppress standard Python warnings (like DeprecationWarnings)
+warnings.filterwarnings("ignore")
+
+# Set the PyBaMM logger level to ERROR to hide warnings and below
+pybamm.set_logging_level("ERROR")
 
 device = (
     "cuda"
@@ -23,107 +36,112 @@ device = (
     else "cpu"
 )
 
-Q_rated = 3      # Ah, matches Chen2020 nominal cell capacity
-current = -1.5   # A
-V_cut_lb = 3
+# =======================================================
+# Sample from the prior and simulate a single battery
+Q_rated = 2.5 # Ah
+current = -1.25 # A
+dod = 1  # DOD range
+V_cut_lb = 2.5
 V_cut_ub = 4.2
-t_typ = np.abs(3600 * Q_rated / current)
-t_sim = np.abs(int(3700 * Q_rated / current))
-print(t_sim)
-def t_normal(data): return data / t_sim
-def v_normal(data): return (data - V_cut_lb) / (V_cut_ub - V_cut_lb)
-
-# Pick 2 well-known, physically meaningful parameters to vary for the test
-param_names = [
-    "Negative particle diffusivity [m2.s-1]",
-    "Positive particle diffusivity [m2.s-1]",
-]
-
-num_dim = len(param_names)
-
-# log10-uniform priors spanning a couple orders of magnitude around Chen2020 defaults
-prior_min = torch.tensor([-15.0, -15.0])
-prior_max = torch.tensor([-12.0, -12.0])
-prior = utils.BoxUniform(low=prior_min, high=prior_max)
 
 
-
-base_params = pybamm.ParameterValues("Chen2020")
-
-def simulator(theta):
-
-    neg_diff = float(10 ** theta[0])
-    pos_diff = float(10 ** theta[1])
-
-    parameter_values = pybamm.ParameterValues("Chen2020")
-    parameter_values.update(
-        {
-            "Negative particle diffusivity [m2.s-1]": float(10 ** theta[0]),
-            "Positive particle diffusivity [m2.s-1]": float(10 ** theta[1]),
-        }
-    )
-
-    model = pybamm.lithium_ion.SPMe()
-    experiment = pybamm.Experiment([
-        f"Discharge at {abs(current)} A for {t_sim} seconds or until {V_cut_lb} V",
-    ])
+num_dim = 11
 
 
-    # try:
-    print("simulating")
-    sim = pybamm.Simulation(model, experiment= experiment, parameter_values=parameter_values,
-                            solver=pybamm.IDAKLUSolver(rtol=1e-3, atol=1e-3))
-    sol = sim.solve(initial_soc=1.0)
-    print("termination:", sol.termination)
-    print("final voltage:", sol["Terminal voltage [V]"].entries[-1])
-    print("final time:", sol["Time [s]"].entries[-1])
+t_typ = np.abs(3600*Q_rated*dod/current)
+t_sim = np.abs(int(3700*Q_rated*dod/current))
 
+def t_normal(data):
+    return data/t_typ
+def v_normal(data):
+    return (data-V_cut_lb)/(V_cut_ub-V_cut_lb)
 
-    Voltage = torch.Tensor(np.array(sol["Terminal voltage [V]"].entries))
-    Time = torch.Tensor(np.array(sol["Time [s]"].entries))
-    num_points = 100
+prior_min = []
+prior_max = []
+for i in range(num_dim):
+    prior_min.append(list(params_log.values())[i][0])
+    prior_max.append(list(params_log.values())[i][1])
+prior = utils.BoxUniform(low=torch.as_tensor(prior_min), high=torch.as_tensor(prior_max))
+
+def generate_voltage_curve(prior):
+    prior, num_parameters, prior_returns_numpy = process_prior(prior)
+
+    samples = prior.sample((1,))
+    params = np.asarray(samples)[0,:]
+
+    this_param = []
+    for j in range(num_dim):
+        if list(params_log_flag.values())[j]==1:
+            this_param.append(10**params[j])
+        else:
+            this_param.append(params[j])
+
+    params = params_setting(this_param)
+    results = simulator(params, current, t_sim, V_cut_lb, V_cut_ub)
+    if isinstance(results, str):
+        return None, None, 1
+    num_points=100
+    s = torch.normal(0, 0.005, size =(num_points,))
+
+    Voltage = torch.tensor(results["Terminal voltage [V]"].entries)
+    Time = torch.tensor(results["Time [s]"].entries)
+
     this_t = np.linspace(0, Time[-1], num_points)
-    f = interp1d(Time, Voltage, kind="slinear")
-    this_v = torch.Tensor(f(this_t)) + torch.normal(0, 0.005, size=(num_points,))
+    f = interp1d(Time, Voltage, kind='slinear') 
+
+    this_v = torch.tensor(f(this_t)) + s
+
 
     v_norm = v_normal(this_v)
-    t_norm = t_normal(this_t)   
+    t_norm = t_normal(this_t)
 
-    last_time = torch.tensor([Time[-1].item()], dtype=torch.float32)
-    return torch.concatenate([last_time, v_norm])  # length-200, avoids the norm-collapse issue too
+    y_obs = np.sqrt(np.asarray(t_norm)**2 + np.asarray(v_norm)**2)
 
-def my_model(params):
-    return simulator(params)
+    
+    return samples, y_obs, 0
 
-prior = BoxUniform(low=torch.as_tensor(prior_min), high=torch.as_tensor(prior_max))
+def run_multiple_checks(prior, n_checks=30, max_attempts=200):
+    all_errors = []
+    n_extreme_skipped = 0
+    attempts = 0
 
-prior, num_parameters, prior_returns_numpy = process_prior(prior)
-simulator_fn = process_simulator(my_model, prior, prior_returns_numpy)
-check_sbi_inputs(simulator_fn, prior)
+    while len(all_errors) < n_checks and attempts < max_attempts:
+        attempts += 1
+        true_features, y_obs, was_extreme = generate_voltage_curve(prior)  # have it return a flag
+        if was_extreme:
+            n_extreme_skipped += 1
+            continue
 
-num_simulations = 10
-num_workers = 6
-theta, x = simulate_for_sbi(
-    simulator_fn, proposal=prior, num_simulations=num_simulations, num_workers=num_workers
-)
+        posterior_samples = posterior.sample((1000,), x=y_obs, show_progress_bars=False)
+        posterior_means = posterior_samples.mean(dim=0)
+        normalized_error = ((posterior_means - true_features.squeeze(0)) / prior_range)**2
+        all_errors.append(normalized_error)
 
-theta_tra = theta.clone().detach()
-x_tra = x.clone().detach()
+    print(f"Skipped {n_extreme_skipped} extreme-case draws out of {attempts} attempts")
+    return torch.stack(all_errors)
 
-nde_nsf = posterior_nn(model="nsf", z_score_x='structured')
-inference = NPE(prior=prior, density_estimator=nde_nsf, device=device)
-print(type(theta_tra))
-print(type(x_tra))
-inference = inference.append_simulations(theta_tra, x_tra, proposal=prior, data_device=device)
+# =============================================
+## Load the model
 
 if __name__ == '__main__':
-    max_num_epochs = 100
-    batch_size = 20
-    lr = 1e-3
-    clip = 5
+    model_dir = Path(__file__).resolve().parents[2] / "models" / "SBI_models"
 
-    density_estimator = inference.train(
-        show_train_summary=True, max_num_epochs=max_num_epochs,
-        learning_rate=lr, training_batch_size=batch_size,
-        validation_fraction=0.5, clip_max_norm=clip,
-    )
+    with open(model_dir / "inference_25R.pkl", "rb") as handle:
+        inference = pickle.load(handle)
+
+
+    posterior = inference.build_posterior()
+
+    prior_min_t = torch.tensor(prior_min)
+    prior_max_t = torch.tensor(prior_max)
+    prior_range = prior_max_t - prior_min_t
+
+    all_errors = run_multiple_checks(prior, n_checks=100)
+    mean_errors = all_errors.mean(dim=0)
+
+
+    param_names = list(params_log.keys())
+    for name, err in zip(param_names, mean_errors):
+        print(f"{name:40s} normalized MSE: {err.item():.4f}")
+
+    print(f"\nOverall normalized MSE: {mean_errors.mean().item():.4f}")

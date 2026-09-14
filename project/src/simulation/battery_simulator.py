@@ -3,6 +3,7 @@ import pybamm
 import numpy as np
 import traceback
 
+
 def simulator(params, current, t_sim, V_cut_lb, V_cut_ub):
     # This is the base level simulator called by the SBI models during trainning
     # params: The physical state of the battery
@@ -28,13 +29,13 @@ def simulator(params, current, t_sim, V_cut_lb, V_cut_ub):
 
     sim = pybamm.Simulation(model, parameter_values=parameter_values,
                         solver=solver, var_pts= var_pts)
-    t_eval = np.linspace(0, t_sim*3, num=1000) # The paper used t_sim*3
+    t_eval = np.linspace(0, t_sim, num=1000) # The paper used t_sim*3
 
     try:
         sim.solve(t_eval=t_eval)
         # sim.solve()
         return sim.solution
     except Exception as e:
-        print('Extreme case error!', repr(e))
-        traceback.print_exc()
+        # print('Extreme case error!', repr(e)) # This print the error but not the whole data dump
+        # traceback.print_exc() # This prints the full error
         return 'Extreme case error!'

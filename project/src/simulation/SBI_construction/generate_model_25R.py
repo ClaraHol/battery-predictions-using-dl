@@ -35,7 +35,6 @@ from scipy.interpolate import interp1d
 
 from src.simulation.battery_simulator import simulator
 
-
 # ==============================================================================
 # CODE ATTRIBUTION & ADAPTATION NOTICE
 # ------------------------------------------------------------------------------
@@ -107,10 +106,7 @@ def my_model(params):
     if isinstance(results, str):
         ############# abnormal
 
-        this_t = torch.linspace(0, t_sim, num_points)
-        
-        this_v = torch.ones(num_points)*V_cut_lb + s
-        #############
+        return np.full(num_points, np.nan)
     else:
         ############# normal
         Voltage = torch.tensor(results["Terminal voltage [V]"].entries)
@@ -188,7 +184,7 @@ if __name__ == '__main__':
     start = time.time()
     ### Train the model, validation deactivated
     inference.train(show_train_summary=True, max_num_epochs=max_num_epochs,  
-                    learning_rate =lr, training_batch_size=batch_size ,validation_fraction=0.4, clip_max_norm=clip,
+                    learning_rate =lr, training_batch_size=batch_size ,validation_fraction=0.05, clip_max_norm=clip,
                     )
     end = time.time()
     print("time used:",end-start)
@@ -198,3 +194,5 @@ if __name__ == '__main__':
     output_dir.mkdir(parents=True, exist_ok=True)
     with open(output_dir / "inference_25R.pkl", "wb") as handle:
         pickle.dump(inference, handle)
+
+
