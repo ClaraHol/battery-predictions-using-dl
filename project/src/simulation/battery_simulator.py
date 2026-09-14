@@ -16,17 +16,6 @@ def simulator(params, current, t_sim, V_cut_lb, V_cut_ub):
     params["Current function [A]"] = current
     parameter_values = pybamm.ParameterValues(params)
 
-    # experiment = pybamm.Experiment([
-    #     f"Discharge at {abs(current)} A for {t_sim} seconds or until {V_cut_lb} or {V_cut_ub} V",
-    # ])
-
-    experiment = pybamm.Experiment([
-    pybamm.step.current(
-        abs(current),
-        duration=t_sim,
-        termination=[f"{V_cut_lb} V", f"{V_cut_ub} V"]
-    )
-    ])
 
     solver = pybamm.IDAKLUSolver(rtol= 1e-3, atol= 1e-3)
     var_pts = {
@@ -37,13 +26,13 @@ def simulator(params, current, t_sim, V_cut_lb, V_cut_ub):
    "r_p": 20,  # positive particle radius direction mesh size
    }
 
-    sim = pybamm.Simulation(model, experiment= experiment, parameter_values=parameter_values,
+    sim = pybamm.Simulation(model, parameter_values=parameter_values,
                         solver=solver, var_pts= var_pts)
-    t_eval = np.linspace(0, t_sim*3, num=1000)
+    t_eval = np.linspace(0, t_sim*3, num=1000) # The paper used t_sim*3
 
     try:
-    #   sim.solve(t_eval=t_eval)
-        sim.solve()
+        sim.solve(t_eval=t_eval)
+        # sim.solve()
         return sim.solution
     except Exception as e:
         print('Extreme case error!', repr(e))

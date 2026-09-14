@@ -71,7 +71,7 @@ V_cut_ub = 4.2
 num_workers = 8
 
 # Define the number of sample trials, 50000 is used in this work
-num_simulations=50000
+num_simulations=1000
 num_dim = 11
 
 # I am uncertain about the exact logic of why t_typ and t_sim are different. It is t_typ which is used for normilization
@@ -145,7 +145,7 @@ prior, num_parameters, prior_returns_numpy = process_prior(prior)
 simulator_fn = process_simulator(my_model, prior, prior_returns_numpy)
 check_sbi_inputs(simulator_fn, prior)
 
-num_simulations = 10
+
 num_workers = 4
 theta, x = simulate_for_sbi(
     simulator_fn, proposal=prior, num_simulations=num_simulations, num_workers=num_workers

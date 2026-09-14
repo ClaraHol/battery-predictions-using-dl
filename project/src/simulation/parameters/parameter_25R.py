@@ -254,6 +254,7 @@ def params_setting(params):
     'Initial outer SEI thickness [m]': 2.5e-9,#2.5e-09
     'Inner SEI partial molar volume [m3.mol-1]':0.1, ### useless but necessary
     'Outer SEI partial molar volume [m3.mol-1]':0.1, ### useless but necessary
+    'SEI partial molar volume [m3.mol-1]': 0.1, # Another vairable undefined in the orignal version
     'Ratio of lithium moles to SEI moles': 0.1, ### useless but necessary
     ######################################################################
     ##### Initial parameters 
