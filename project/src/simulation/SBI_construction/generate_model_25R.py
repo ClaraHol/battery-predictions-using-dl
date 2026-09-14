@@ -34,7 +34,7 @@ from src.simulation.parameters.parameter_25R import params_log, params_log_flag,
 from scipy.interpolate import interp1d
 
 from src.simulation.battery_simulator import simulator
-
+import os
 # ==============================================================================
 # CODE ATTRIBUTION & ADAPTATION NOTICE
 # ------------------------------------------------------------------------------
@@ -70,7 +70,7 @@ V_cut_ub = 4.2
 num_workers = 8
 
 # Define the number of sample trials, 50000 is used in this work
-num_simulations=1000
+num_simulations= 50000
 num_dim = 11
 
 # I am uncertain about the exact logic of why t_typ and t_sim are different. It is t_typ which is used for normilization
@@ -82,6 +82,14 @@ def t_normal(data):
     return data/t_typ
 def v_normal(data):
     return (data-V_cut_lb)/(V_cut_ub-V_cut_lb)
+
+def get_num_workers(default=4):
+    # LSF sets this to the number of processors allocated via -n
+    n = os.environ.get("LSB_DJOB_NUMPROC")
+    if n is not None:
+        return int(n)
+    # Fallback for local/non-HPC runs
+    return min(default, os.cpu_count() or default)
 
 prior_min = []
 prior_max = []
@@ -142,7 +150,8 @@ simulator_fn = process_simulator(my_model, prior, prior_returns_numpy)
 check_sbi_inputs(simulator_fn, prior)
 
 
-num_workers = 4
+num_workers = get_num_workers()
+print(f"Using {num_workers} workers")
 theta, x = simulate_for_sbi(
     simulator_fn, proposal=prior, num_simulations=num_simulations, num_workers=num_workers
 )
