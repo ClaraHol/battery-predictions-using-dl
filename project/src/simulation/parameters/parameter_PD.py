@@ -248,10 +248,12 @@ def params_setting(params):
     'Thermodynamic factor': 2, # WangCY-Nature
     ######################################################################
     'SEI resistivity [Ohm.m]': params[6]/(5e-9),
+    'Initial SEI thickness [m]': 5e-9, # The total thickness
     'Initial inner SEI thickness [m]': 2.5e-9,#2.5e-09
     'Initial outer SEI thickness [m]': 2.5e-9,#2.5e-09
     'Inner SEI partial molar volume [m3.mol-1]':0.1, ### useless but necessary
     'Outer SEI partial molar volume [m3.mol-1]':0.1, ### useless but necessary
+    'SEI partial molar volume [m3.mol-1]': 0.1, # Another vairable undefined in the orignal version
     'Ratio of lithium moles to SEI moles': 0.1, ### useless but necessary
     ######################################################################
     ##### Initial parameters 
