@@ -141,6 +141,42 @@ def my_model(params):
     return y_obs
 
 
+## This fuction was generated using claude:
+def run_simulations_with_checkpoints(
+    simulator_fn, prior, num_simulations, num_workers,
+    chunk_size=2000, checkpoint_dir="sim_chunks"
+):
+    out_dir = Path(checkpoint_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    n_chunks = (num_simulations + chunk_size - 1) // chunk_size
+    theta_parts, x_parts = [], []
+
+    for i in range(n_chunks):
+        this_chunk_size = min(chunk_size, num_simulations - i * chunk_size)
+        chunk_file = out_dir / f"chunk_{i:04d}.pt"
+
+        if chunk_file.exists():
+            print(f"Chunk {i+1}/{n_chunks}: found on disk, loading")
+            theta_c, x_c = torch.load(chunk_file)
+        else:
+            print(f"Chunk {i+1}/{n_chunks}: running {this_chunk_size} simulations")
+            theta_c, x_c = simulate_for_sbi(
+                simulator_fn, proposal=prior,
+                num_simulations=this_chunk_size, num_workers=num_workers,
+            )
+            # write to a temp name and rename, so a crash mid-write can't leave a corrupt chunk file
+            tmp_file = chunk_file.with_suffix(".tmp")
+            torch.save((theta_c, x_c), tmp_file)
+            tmp_file.rename(chunk_file)
+
+        theta_parts.append(theta_c)
+        x_parts.append(x_c)
+
+    theta = torch.cat(theta_parts, dim=0)
+    x = torch.cat(x_parts, dim=0)
+    return theta, x
+
 # 1. Implement the data generate
 # Data generated are used for the model training
 
@@ -152,8 +188,10 @@ check_sbi_inputs(simulator_fn, prior)
 
 num_workers = get_num_workers()
 print(f"Using {num_workers} workers")
-theta, x = simulate_for_sbi(
-    simulator_fn, proposal=prior, num_simulations=num_simulations, num_workers=num_workers
+theta, x = run_simulations_with_checkpoints(
+    simulator_fn, prior, num_simulations=num_simulations,
+    num_workers=num_workers, chunk_size=2000,
+    checkpoint_dir=Path(__file__).resolve().parents[3] / "models" / "sim_chunks",
 )
 
 ### 2.Load the dataset
@@ -172,7 +210,7 @@ hidden_feature = int(2**8)
 dropout = 0.05
 use_batch_norm = True
 ### training-related
-max_num_epochs = 200
+max_num_epochs = 5000
 batch_size = 256
 lr = 0.0005
 clip = 21.0

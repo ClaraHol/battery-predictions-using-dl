@@ -36,6 +36,7 @@ def simulator(params, current, t_sim, V_cut_lb, V_cut_ub):
         # sim.solve()
         return sim.solution
     except Exception as e:
-        # print('Extreme case error!', repr(e)) # This print the error but not the whole data dump
-        # traceback.print_exc() # This prints the full error
-        return 'Extreme case error!'
+        result = f"Extreme case error!"
+        del sim, model, parameter_values, solver
+        gc.collect()
+        return result

@@ -4,8 +4,8 @@
 #BSUB -n 8
 #BSUB -R "span[hosts=1]"
 #BSUB -q hpc
-#BSUB -W 01:20
-#BSUB -R "rusage[mem=1GB]"
+#BSUB -W 03:00
+#BSUB -R "rusage[mem=4GB]"
 
 module load python/3.13.11
 source .venv/bin/activate

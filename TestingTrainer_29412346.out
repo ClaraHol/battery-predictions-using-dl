@@ -3,15 +3,15 @@ Using 8 workers
 
 ------------------------------------------------------------
 Sender: LSF System <lsfadmin@hpc.dtu.dk>
-Subject: Job 29395949: <TrainModel> in cluster <dcc> Exited
+Subject: Job 29412346: <TrainModel> in cluster <dcc> Exited
 
-Job <TrainModel> was submitted from host <hpclogin1> by user <s214728> in cluster <dcc> at Mon Sep 14 16:27:27 2026
-Job was executed on host(s) <8*n-62-11-65>, in queue <hpc>, as user <s214728> in cluster <dcc> at Mon Sep 14 16:27:29 2026
+Job <TrainModel> was submitted from host <hpclogin1> by user <s214728> in cluster <dcc> at Tue Sep 15 08:38:10 2026
+Job was executed on host(s) <8*n-62-31-15>, in queue <hpc>, as user <s214728> in cluster <dcc> at Tue Sep 15 08:38:11 2026
 </zhome/e3/5/167986> was used as the home directory.
 </zhome/e3/5/167986/Desktop/battery-predictions-using-dl> was used as the working directory.
-Started at Mon Sep 14 16:27:29 2026
-Terminated at Mon Sep 14 17:48:59 2026
-Results reported at Mon Sep 14 17:48:59 2026
+Started at Tue Sep 15 08:38:11 2026
+Terminated at Tue Sep 15 09:37:55 2026
+Results reported at Tue Sep 15 09:37:55 2026
 
 Your job looked like:
 
@@ -23,7 +23,7 @@ Your job looked like:
 #BSUB -n 8
 #BSUB -R "span[hosts=1]"
 #BSUB -q hpc
-#BSUB -W 01:20
+#BSUB -W 03:00
 #BSUB -R "rusage[mem=1GB]"
 
 module load python/3.13.11
@@ -32,21 +32,21 @@ source .venv/bin/activate
 python project/src/simulation/SBI_construction/generate_model_25R.py 
 ------------------------------------------------------------
 
-TERM_RUNLIMIT: job killed after reaching LSF run time limit.
-Exited with exit code 140.
+TERM_MEMLIMIT: job killed after reaching LSF memory usage limit.
+Exited with exit code 1.
 
 Resource usage summary:
 
-    CPU time :                                   38789.00 sec.
-    Max Memory :                                 4678 MB
-    Average Memory :                             4247.81 MB
+    CPU time :                                   23917.00 sec.
+    Max Memory :                                 8192 MB
+    Average Memory :                             5483.39 MB
     Total Requested Memory :                     8192.00 MB
-    Delta Memory :                               3514.00 MB
+    Delta Memory :                               0.00 MB
     Max Swap :                                   -
     Max Processes :                              14
     Max Threads :                                27
-    Run time :                                   4890 sec.
-    Turnaround time :                            4892 sec.
+    Run time :                                   3584 sec.
+    Turnaround time :                            3585 sec.
 
 The output (if any) is above this job summary.
 
@@ -54,5 +54,5 @@ The output (if any) is above this job summary.
 
 PS:
 
-Read file <TestingTrainer_29395949.err> for stderr output of this job.
+Read file <TestingTrainer_29412346.err> for stderr output of this job.
 
