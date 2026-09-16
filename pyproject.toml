@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "matplotlib>=3.11.1",
     "numpy>=2.5.2",
+    "pyarrow>=25.0.1",
     "pybamm>=26.8.0.0",
     "sbi>=0.27.0",
 ]
