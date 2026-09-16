@@ -2,6 +2,7 @@
 import pybamm
 import numpy as np
 import traceback
+import gc
 
 
 def simulator(params, current, t_sim, V_cut_lb, V_cut_ub):

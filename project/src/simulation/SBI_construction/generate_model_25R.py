@@ -50,6 +50,9 @@ import os
 # ==============================================================================
 
 
+print("Python executable:", sys.executable)
+print("Python version:", sys.version)
+
 device = (
     "cuda"
     if torch.cuda.is_available()
@@ -191,7 +194,7 @@ print(f"Using {num_workers} workers")
 theta, x = run_simulations_with_checkpoints(
     simulator_fn, prior, num_simulations=num_simulations,
     num_workers=num_workers, chunk_size=2000,
-    checkpoint_dir=Path(__file__).resolve().parents[3] / "models" / "sim_chunks",
+    checkpoint_dir=Path(__file__).resolve().parents[3] / "models" / "sim_chunks" / "25R",
 )
 
 ### 2.Load the dataset

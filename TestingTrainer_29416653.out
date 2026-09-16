@@ -1,0 +1,60 @@
+False
+Using 8 workers
+Chunk 1/2: running 2000 simulations
+Chunk 2/2: running 1000 simulations
+
+------------------------------------------------------------
+Sender: LSF System <lsfadmin@hpc.dtu.dk>
+Subject: Job 29416653: <TrainModel> in cluster <dcc> Exited
+
+Job <TrainModel> was submitted from host <n-62-30-5> by user <s214728> in cluster <dcc> at Tue Sep 15 13:38:38 2026
+Job was executed on host(s) <8*n-62-30-25>, in queue <hpc>, as user <s214728> in cluster <dcc> at Tue Sep 15 13:38:40 2026
+</zhome/e3/5/167986> was used as the home directory.
+</zhome/e3/5/167986/Desktop/battery-predictions-using-dl> was used as the working directory.
+Started at Tue Sep 15 13:38:40 2026
+Terminated at Tue Sep 15 13:48:53 2026
+Results reported at Tue Sep 15 13:48:53 2026
+
+Your job looked like:
+
+------------------------------------------------------------
+# LSBATCH: User input
+#BSUB -J TrainModel
+#BSUB -o TestingTrainer_%J.out
+#BSUB -e TestingTrainer_%J.err
+#BSUB -n 8
+#BSUB -R "span[hosts=1]"
+#BSUB -q hpc
+#BSUB -W 00:10
+#BSUB -R "rusage[mem=1GB]"
+
+module load python/3.13.11
+source .venv/bin/activate
+
+python project/src/simulation/SBI_construction/generate_model_25R.py 
+------------------------------------------------------------
+
+TERM_RUNLIMIT: job killed after reaching LSF run time limit.
+Exited with exit code 140.
+
+Resource usage summary:
+
+    CPU time :                                   4041.00 sec.
+    Max Memory :                                 4667 MB
+    Average Memory :                             3845.71 MB
+    Total Requested Memory :                     8192.00 MB
+    Delta Memory :                               3525.00 MB
+    Max Swap :                                   -
+    Max Processes :                              14
+    Max Threads :                                28
+    Run time :                                   613 sec.
+    Turnaround time :                            615 sec.
+
+The output (if any) is above this job summary.
+
+
+
+PS:
+
+Read file <TestingTrainer_29416653.err> for stderr output of this job.
+
