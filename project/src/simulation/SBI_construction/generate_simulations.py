@@ -11,9 +11,8 @@ from sbi import analysis as analysis
 from sbi.inference import simulate_for_sbi
 from sbi.neural_nets import posterior_nn  
 from scipy.interpolate import interp1d
+import importlib
 
-from sbi.analysis import plot_summary
-import matplotlib
 from sbi.inference import NPE, simulate_for_sbi
 
 from sbi.utils.user_input_checks import (
@@ -26,10 +25,9 @@ from sbi.utils import BoxUniform
 
 import pickle
 from sklearn.model_selection import KFold, cross_validate
-
+import argparse
 sys.path.append(str(Path(__file__).resolve().parents[3]))
 
-from src.simulation.parameters.parameter_25R import params_log, params_log_flag, params_setting
 
 
 from scipy.interpolate import interp1d
@@ -64,21 +62,96 @@ device = (
 
 print(torch.cuda.is_available())
 
+CHEMISTRY_CONFIG = {
+    "25R": {
+        "params_module": "src.simulation.parameters.parameter_25R",
+        "output_subdir": "25R",
+        "Q_rated": 2.5, "current": -1.25, "dod": 1,
+        "V_cut_lb": 2.5, "V_cut_ub": 4.2,
+    },
+    "HG2": {
+        "params_module": "src.simulation.parameters.parameter_HG2",
+        "output_subdir": "HG2",
+        "Q_rated": 3, "current": -1.5, "dod": 1,
+        "V_cut_lb": 2.5, "V_cut_ub": 4.2,
+    },
+    "M1A": {
+        "params_module": "src.simulation.parameters.parameter_M1A",
+        "output_subdir": "M1A",
+        "Q_rated": 1.1, "current": -0.55, "dod": 1,
+        "V_cut_lb": 2, "V_cut_ub": 2.6,
+    },
+    "MJ1": {
+        "params_module": "src.simulation.parameters.parameter_MJ1",
+        "output_subdir": "MJ1",
+        "Q_rated": 3.5, "current": 3.5, "dod": 1,
+        "V_cut_lb": 2.5, "V_cut_ub": 4.2,
+    },
+    "PA": {
+        "params_module": "src.simulation.parameters.parameter_PA",
+        "output_subdir": "PA",
+        "Q_rated": 74.273, "current": 24.33, "dod": 1,
+        "V_cut_lb": 2.75, "V_cut_ub": 4.2,
+    },
+    "PBC": {
+        "params_module": "src.simulation.parameters.parameter_PBC",
+        "output_subdir": "PBC",
+        "Q_rated": 76, "current": 25.43, "dod": 1,
+        "V_cut_lb": 2.75, "V_cut_ub": 4.2,
+    },
+    "PD": {
+        "params_module": "src.simulation.parameters.parameter_PD",
+        "output_subdir": "PD",
+        "Q_rated": 83.456, "current": 28, "dod": 1,
+        "V_cut_lb": 2.5, "V_cut_ub": 4.15,
+    },
+    "VTC5A": {
+        "params_module": "src.simulation.parameters.parameter_VTC5A",
+        "output_subdir": "VTC5A",
+        "Q_rated": 2.5, "current": 2.5, "dod": 1,
+        "V_cut_lb": 2.5, "V_cut_ub": 4.25,
+    },
+    "VTC6": {
+        "params_module": "src.simulation.parameters.parameter_VTC6",
+        "output_subdir": "VTC6",
+        "Q_rated": 3, "current": 0.6, "dod": 1,
+        "V_cut_lb": 2.5, "V_cut_ub": 4.25,
+    },
+}
 
-# Define some basic parameters for this public from Tongjij
-Q_rated = 2.5 # Ah
-current = -1.25 # A
-dod = 1  # DOD range
-V_cut_lb = 2.5
-V_cut_ub = 4.2
+parser = argparse.ArgumentParser()
+parser.add_argument("--chemistry", required=True, choices=CHEMISTRY_CONFIG.keys())
+args = parser.parse_args()
+
+
+config = CHEMISTRY_CONFIG[args.chemistry]
+print("Chemestry used", args.chemistry)
+# Load the specefic parameters for the chemistry
+params_module = importlib.import_module(config["params_module"])
+params_log = params_module.params_log
+params_log_flag = params_module.params_log_flag
+params_setting = params_module.params_setting
+
+# Set the save directory for simulations
+checkpoint_dir = Path(__file__).resolve().parents[3] / "models" / "sim_chunks" / config["output_subdir"]
+dataset_path = (
+    Path(__file__).resolve().parents[3] / "models" / "Full_simulations" / f"dataset_{args.chemistry}.pt"
+)
+
+# Set charging conditions and the voltage cut off
+Q_rated = config["Q_rated"]
+current = config["current"]
+dod = config["dod"]
+V_cut_lb = config["V_cut_lb"]
+V_cut_ub = config["V_cut_ub"]
+
 num_workers = 8
 
 # Define the number of sample trials, 50000 is used in this work
-num_simulations= 5000
+num_simulations= 50000
 num_dim = 11
 
-# I am uncertain about the exact logic of why t_typ and t_sim are different. It is t_typ which is used for normilization
-# but I don't understand why we don't normalize with the total time scale
+
 t_typ = np.abs(3600*Q_rated*dod/current)
 t_sim = np.abs(int(3700*Q_rated*dod/current))
 
@@ -118,16 +191,13 @@ def my_model(params):
     if isinstance(results, str):
         ############# abnormal
 
-        return np.full(num_points+1, np.nan)
+        return np.full(num_points, np.nan)
     else:
         ############# normal
         Voltage = torch.tensor(results["Terminal voltage [V]"].entries)
         Time = torch.tensor(results["Time [s]"].entries)
 
-        # import matplotlib.pyplot as plt
-        # plt.plot(Time, Voltage)
-        # plt.show()
-       
+
 
         this_t = np.linspace(0, Time[-1], num_points)
         f = interp1d(Time, Voltage, kind='slinear') 
@@ -136,14 +206,12 @@ def my_model(params):
 
         #############
     v_norm = v_normal(this_v)
-    v_norm = torch.clamp(v_norm, 0.0, 1.0)
     t_norm = t_normal(this_t)
-    duration_norm = (Time[-1] / t_typ).unsqueeze(0)
     # This is a very weird way to encode time. Time steps ae uniform so only the stop time is actually relevant.
     # We also destroy information since 0.25 + 0.25 = 0.5 + 0 = 0 + 0.5, a smarter way to do it would be adding the final time
     # as a additional observation (giving 101 points)
-    # y_obs = np.sqrt(np.asarray(t_norm)**2 + np.asarray(v_norm)**2)
-    y_obs = torch.cat((duration_norm, v_norm))
+    y_obs = torch.sqrt(t_norm**2+v_norm**2)
+
     return y_obs
 
 
@@ -183,8 +251,6 @@ def run_simulations_with_checkpoints(
     x = torch.cat(x_parts, dim=0)
     return theta, x
 
-# 1. Implement the data generate
-# Data generated are used for the model training
 
 
 prior, num_parameters, prior_returns_numpy = process_prior(prior)
@@ -196,59 +262,11 @@ num_workers = get_num_workers()
 print(f"Using {num_workers} workers")
 theta, x = run_simulations_with_checkpoints(
     simulator_fn, prior, num_simulations=num_simulations,
-    num_workers=num_workers, chunk_size=2000,
-    checkpoint_dir=Path(__file__).resolve().parents[3] / "models" / "sim_chunks" / "25R",
+    num_workers=num_workers, chunk_size= 1000,
+    checkpoint_dir=checkpoint_dir,
 )
 
-### 2.Load the dataset
-theta_tra = theta.clone().detach()
-x_tra = x.clone().detach()
 
-### 3.Set the hyper-parameters
-### max epoch number set to be 200 in this work, to aviod overfitting
-### spline flow
-flow_step=9
-bin=9
-tail_bound = 3.0
-### resnet
-res_block = 9
-hidden_feature = int(2**8)
-dropout = 0.05
-use_batch_norm = True
-### training-related
-max_num_epochs = 5000
-batch_size = 256
-lr = 0.00005
-clip = 21.0
-#############################
-
-### 4.Create the model
-nde_nsf = posterior_nn(model="nsf" ,z_score_x='structured')
-
-inference = NPE(show_progress_bars=True,prior=prior,density_estimator=nde_nsf, device=device)
-inference = inference.append_simulations(theta_tra, x_tra, proposal=prior, data_device=device)
-
-
-
-
-if __name__ == '__main__':
-    print("Starting")
-    import time
-    start = time.time()
-    ### Train the model, validation deactivated
-    inference.train(show_train_summary=True, max_num_epochs=max_num_epochs,  
-                    learning_rate =lr, training_batch_size=batch_size ,validation_fraction=0.05, clip_max_norm=clip,
-                    )
-    end = time.time()
-    print("time used:",end-start)
-    
-    ### Save the trained model
-
-    output_dir = Path(__file__).resolve().parents[3] / "models" / "SBI_models"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    with open(output_dir / "inference_25R.pkl", "wb") as handle:
-        pickle.dump(inference, handle)
-    
-    fig, axes = plot_summary(inference, tags=["training_loss", "validation_loss"], figsize=(10, 4))
-    fig.savefig(output_dir / "training_summary.png", dpi=150, bbox_inches="tight")
-
+dataset_path.parent.mkdir(parents=True, exist_ok=True)
+torch.save((theta, x), dataset_path)
+print(f"Saved dataset to {dataset_path}")
