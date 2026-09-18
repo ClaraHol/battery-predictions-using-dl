@@ -17,7 +17,7 @@ from sbi.inference import NPE, simulate_for_sbi
 from sbi.utils import BoxUniform
 from battery_simulator import simulator
 from parameters.parameter_25R import params_log, params_log_flag, params_setting
-
+from sbi.analysis import plot_summary
 import pickle
 import warnings
 import pybamm
@@ -63,9 +63,9 @@ for i in range(num_dim):
     prior_max.append(list(params_log.values())[i][1])
 prior = utils.BoxUniform(low=torch.as_tensor(prior_min), high=torch.as_tensor(prior_max))
 
-def generate_voltage_curve(prior):
-    prior, num_parameters, prior_returns_numpy = process_prior(prior)
 
+def generate_voltage_curve(prior):  
+    prior, num_parameters, prior_returns_numpy = process_prior(prior)
     samples = prior.sample((1,))
     params = np.asarray(samples)[0,:]
 
@@ -95,12 +95,12 @@ def generate_voltage_curve(prior):
     v_norm = v_normal(this_v)
     t_norm = t_normal(this_t)
 
-    y_obs = np.sqrt(np.asarray(t_norm)**2 + np.asarray(v_norm)**2)
+    y_obs = torch.sqrt(t_norm**2+v_norm**2)
 
     
     return samples, y_obs, 0
 
-def run_multiple_checks(prior, n_checks=30, max_attempts=200):
+def run_multiple_checks(prior, n_checks=30, max_attempts=400):
     all_errors = []
     n_extreme_skipped = 0
     attempts = 0
@@ -112,13 +112,15 @@ def run_multiple_checks(prior, n_checks=30, max_attempts=200):
             n_extreme_skipped += 1
             continue
 
-        posterior_samples = posterior.sample((1000,), x=y_obs, show_progress_bars=False)
+        posterior_samples = posterior.sample((50000,), x=y_obs, show_progress_bars=False)
         posterior_means = posterior_samples.mean(dim=0)
         normalized_error = ((posterior_means - true_features.squeeze(0)) / prior_range)**2
         all_errors.append(normalized_error)
 
+    print(f"Shape: {posterior_samples.T.shape}")
+    correlation = torch.corrcoef(posterior_samples.T)
     print(f"Skipped {n_extreme_skipped} extreme-case draws out of {attempts} attempts")
-    return torch.stack(all_errors)
+    return torch.stack(all_errors), correlation
 
 # =============================================
 ## Load the model
@@ -126,17 +128,17 @@ def run_multiple_checks(prior, n_checks=30, max_attempts=200):
 if __name__ == '__main__':
     model_dir = Path(__file__).resolve().parents[2] / "models" / "SBI_models"
 
-    with open(model_dir / "inference_25R.pkl", "rb") as handle:
+    with open(model_dir / "inference_25R_old_encoding.pkl", "rb") as handle:
         inference = pickle.load(handle)
 
 
-    posterior = inference.build_posterior()
+    posterior = inference.build_posterior(prior = prior)
 
     prior_min_t = torch.tensor(prior_min)
     prior_max_t = torch.tensor(prior_max)
     prior_range = prior_max_t - prior_min_t
 
-    all_errors = run_multiple_checks(prior, n_checks=100)
+    all_errors, correlation = run_multiple_checks(prior, n_checks=300)
     mean_errors = all_errors.mean(dim=0)
 
 
@@ -145,3 +147,11 @@ if __name__ == '__main__':
         print(f"{name:40s} normalized MSE: {err.item():.4f}")
 
     print(f"\nOverall normalized MSE: {mean_errors.mean().item():.4f}")
+    print("\nFull correlation array:")
+
+
+    # print(correlation.tolist())
+
+
+
+    

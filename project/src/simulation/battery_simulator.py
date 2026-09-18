@@ -19,7 +19,7 @@ def simulator(params, current, t_sim, V_cut_lb, V_cut_ub):
     parameter_values = pybamm.ParameterValues(params)
 
 
-    solver = pybamm.IDAKLUSolver(rtol= 1e-3, atol= 1e-3)
+    solver = pybamm.IDAKLUSolver(rtol= 1e-3, atol= 1e-3, options = {"dt_min": 1e-6})
     var_pts = {
    "x_n": 20,  # negative electrode thickness direction mesh size
    "x_s": 10,  # separator thickness direction mesh size
