@@ -258,9 +258,9 @@ def parse_snl_cycle_summary(csv_path: str) -> dict:
     for cell_id, group in df.groupby("cell_id"):
         out[cell_id] = group[["cycle_index", "ah_d"]].sort_values("cycle_index").reset_index(drop=True)
     return out
-
-
- 
+#-------------------------------------------------------------------------------------------------------------
+# Farasis (DL paper own data)
+#-------------------------------------------------------------------------------------------------------------
 def parse_farasis_rpt_metadata(xlsx_path: str) -> pd.DataFrame:
     """
     Parses a '<cell>_dchg_cap_rpt.xlsx' file. Confirmed to come in at least
@@ -309,79 +309,221 @@ def parse_farasis_rpt_metadata(xlsx_path: str) -> pd.DataFrame:
     return result.sort_index()
  
  
+
+ 
 def parse_farasis_rpt_curve(parquet_path: str, rpt_number: int, batch_size: int = 1_000_000) -> pd.DataFrame:
     """
     Streams through the (typically huge, ~100-200MB / tens of millions of
     rows) raw parquet and pulls out every row belonging to one RPT number.
     Does NOT load the whole file into memory - only rows matching rpt_number
     are kept as batches are scanned, avoiding the earlier OOM issue.
- 
+
     Returns the raw multi-stage curve for that RPT: every charge/discharge/
     rest step it contains, INCLUDING the DC-resistance pulse-test sub-phase
     (short-duration steps mixed in with the longer capacity-check cycles -
-    confirmed against real RPT0 data: long ~11000-row steps alternating
-    charge/discharge at a consistent current, interleaved with much
-    shorter ~10-550 row steps that are too brief to be genuine
-    charge/discharge and are almost certainly the DCR pulse test). We
-    haven't confirmed a reliable way to separate these sub-phases purely
-    from step_no, so if you need just the capacity-check portion, filter
-    further downstream using step_no once/if that's pinned down - this
-    function returns everything tagged with that RPT number as-is.
- 
+    confirmed against real RPT0 data: three long ~11000-row full 0-100%
+    SOC charge segments (steps 4, 8, 12) alternating with matching
+    discharge segments, interleaved with much shorter steps too brief to
+    be genuine charge/discharge and almost certainly the DCR pulse test).
+
     Output columns match this pipeline's standard schema as closely as
     possible, plus soc/step_no which are Farasis-specific extras:
     time_s, voltage_V, current_A, temp_C, soc, step_no, cycle_number
     (= rpt_number, for compatibility with code elsewhere expecting a
     'cycle_number' column).
+
+    time_s is seconds elapsed since this RPT's first timestamp, computed
+    from the parquet's time_stamp column - NOT from del_time, which despite
+    its name does not accumulate within a step (confirmed against real
+    data: it sits at a constant 1 for an entire ~3-hour charge segment,
+    so using it as an elapsed-time axis silently produces a flat, useless
+    curve x-axis).
     """
     import pyarrow.parquet as pq
- 
+
     pf = pq.ParquetFile(parquet_path)
     chunks = []
     for batch in pf.iter_batches(
-        columns=["del_time", "current (A)", "voltage (V)", "step_no", "temp", "rpt", "soc"],
+        columns=["time_stamp", "current (A)", "voltage (V)", "step_no", "temp", "rpt", "soc"],
         batch_size=batch_size,
     ):
         df = batch.to_pandas()
         sub = df[df["rpt"] == rpt_number]
         if len(sub):
             chunks.append(sub)
- 
+
     if not chunks:
         raise ValueError(f"No rows found for rpt == {rpt_number} in {parquet_path}")
- 
-    raw = pd.concat(chunks, ignore_index=True)
+
+    raw = pd.concat(chunks, ignore_index=True).sort_values("time_stamp").reset_index(drop=True)
+    time_s = (raw["time_stamp"] - raw["time_stamp"].iloc[0]).dt.total_seconds()
     out = pd.DataFrame({
-        "time_s": raw["del_time"],
+        "time_s": time_s.cumsum(),
         "voltage_V": raw["voltage (V)"],
         "current_A": raw["current (A)"],
         "temp_C": raw["temp"],
         "soc": raw["soc"],
         "step_no": raw["step_no"],
-        "cycle_number": rpt_number,
+        #"cycle_number": rpt_number,
     })
-    return out.sort_values("time_s").reset_index(drop=True)
- 
- 
-def build_farasis_cell_record(cell_id: str, rpt_metadata: pd.DataFrame):
+    return out
+
+
+def extract_primary_charging_curve(rpt_curve_df: pd.DataFrame, min_soc_range: float = 0.9) -> pd.DataFrame:
     """
-    cycle_life is computed in RPT-index units (NOT equivalent full cycles -
-    we don't have a trustworthy way to convert RPT number to EFC count yet;
-    the parquet's total_dischg_thrgh_ah_rounded column gave physically
-    implausible values (huge negatives) when we tried this, so it's left
-    as an open problem rather than guessed at). Treat cycle_life_rpt_units
-    as "reached 90% of initial capacity by RPT N", not "by cycle N".
+    Isolates the single 'official' full charging curve from an RPT's raw
+    multi-stage data (which typically contains several charge segments -
+    confirmed 3 near-full-range charges plus brief DCR-pulse charging
+    blips in real RPT0 data).
+
+    Picks the FIRST (chronologically earliest / lowest step_no) charging
+    segment whose SOC range covers at least min_soc_range (default 0.9,
+    i.e. spans at least 90% of the full SOC range) - this excludes the
+    short DCR-pulse charging blips (which only span a few % SOC) and
+    picks the earliest of the repeated full-range charges rather than
+    later repeats, since we don't have confirmed guidance on which of the
+    repeats (if there are several, as in RPT0's case: 3 of them) is 'the'
+    canonical one. This is a judgment call, not something confirmed
+    against documentation.
+
+    Raises ValueError if no segment meets the SOC-range threshold, rather
+    than silently returning a partial/wrong curve.
+    """
+    charging = rpt_curve_df[rpt_curve_df["current_A"] > 0]
+    candidates = []
+    for step, g in charging.groupby("step_no"):
+        soc_range = g["soc"].max() - g["soc"].min()
+        if soc_range >= min_soc_range:
+            candidates.append((step, g))
+
+    if not candidates:
+        raise ValueError(
+            f"No charging segment found spanning >= {min_soc_range:.0%} of SOC range. "
+            f"Available charging step_no values and their SOC ranges: "
+            + ", ".join(f"step{s}: {g['soc'].max()-g['soc'].min():.2f}"
+                        for s, g in charging.groupby("step_no"))
+        )
+    #for candidate in candidates:
+    #    print(f"Step number : {candidate[0]}")
+    candidates.sort(key=lambda x: x[0])  # chronologically first (lowest step_no)
+    _, primary = candidates[0]
+    return primary.sort_values("time_s").reset_index(drop=True)
+
+
+def compute_efc_per_rpt(parquet_path: str, nominal_capacity_Ah: float, batch_size: int = 1_000_000) -> pd.Series:
+    """
+    Approximates equivalent-full-cycle count at the START of each RPT, using
+    total_dischg_thrgh_ah_rounded as a SIGNED counter measured relative to
+    RPT0's own value (NOT an absolute from-zero counter - treating it as
+    one gave physically implausible values; treating it as a relative delta
+    gives magnitudes that line up well with the paper's reported cycle-life
+    range of 250-1700 cycles, e.g. this reaches ~1400 EFC by the last RPT
+    for cell 019, consistent with that range).
+
+    Streams the parquet rather than loading it fully (this file is huge -
+    tens of millions of rows).
+
+    Returns a pandas Series indexed by integer RPT number, values = approx EFC.
+    """
+    import pyarrow.parquet as pq
+
+    pf = pq.ParquetFile(parquet_path)
+    rpt_min_throughput = {}
+    for batch in pf.iter_batches(columns=["rpt", "total_dischg_thrgh_ah_rounded"], batch_size=batch_size):
+        df = batch.to_pandas()
+        g = df.groupby("rpt")["total_dischg_thrgh_ah_rounded"].min()
+        for rpt_num, val in g.items():
+            if pd.isna(rpt_num):
+                continue
+            if rpt_num not in rpt_min_throughput or val < rpt_min_throughput[rpt_num]:
+                rpt_min_throughput[rpt_num] = val
+
+    s = pd.Series(rpt_min_throughput).sort_index()
+    s.index = s.index.astype(int)
+    baseline = s.loc[0]
+    efc = (s - baseline).abs() / nominal_capacity_Ah
+    return efc
+
+
+def find_bracketing_rpts(efc_per_rpt: pd.Series, target_efc: float):
+    """
+    Per the paper: 'the feature at the 50th equivalent full cycle is
+    generally obtained by interpolating between the features corresponding
+    to the two nearest reference performance tests before and after it.'
+
+    Returns (rpt_before, rpt_after, weight), where weight is how far target_efc
+    sits between the two RPTs' EFC values (0 = exactly at rpt_before,
+    1 = exactly at rpt_after), for linear interpolation of whatever scalar
+    feature you compute from each RPT's data:
+        interpolated_feature = (1-weight)*feature[rpt_before] + weight*feature[rpt_after]
+
+    If target_efc falls before the first RPT or after the last, returns
+    that single nearest RPT with weight=0 (no extrapolation attempted -
+    up to you whether extrapolating makes sense for your use case).
+    """
+    efc_per_rpt = efc_per_rpt.sort_index()
+    before = efc_per_rpt[efc_per_rpt <= target_efc]
+    after = efc_per_rpt[efc_per_rpt >= target_efc]
+
+    if len(before) == 0:
+        rpt_after = after.index[0]
+        return rpt_after, rpt_after, 0.0
+    if len(after) == 0:
+        rpt_before = before.index[-1]
+        return rpt_before, rpt_before, 0.0
+
+    rpt_before = before.index[-1]
+    rpt_after = after.index[0]
+    if rpt_before == rpt_after:
+        return rpt_before, rpt_after, 0.0
+
+    efc_before, efc_after = efc_per_rpt[rpt_before], efc_per_rpt[rpt_after]
+    weight = (target_efc - efc_before) / (efc_after - efc_before)
+    return rpt_before, rpt_after, weight
+
+
+
+def build_farasis_cell_record(cell_id: str, rpt_metadata: pd.DataFrame, parquet_path: str = None,
+                               nominal_capacity_Ah: float = None, target_efc: int = 50):
+    """
+    cycle_life_rpt_units: RPT-index units ("reached 90% of initial capacity
+    by RPT N"). If parquet_path is given, also computes cycle_life in
+    actual EFC units via compute_efc_per_rpt(), plus which two RPTs
+    bracket target_efc and the interpolation weight between them, per the
+    paper's stated method for the 50th-EFC feature:
+    "the feature at the 50th equivalent full cycle is generally obtained
+    by interpolating between the features corresponding to the two
+    nearest reference performance tests before and after it."
+
+    Leave parquet_path=None to skip EFC computation (e.g. if you only have
+    the metadata xlsx for a cell) - RPT-unit fields are still returned.
     """
     from config_and_cleaning import compute_cycle_life
- 
+
     cap_series = rpt_metadata["discharge_cap"]
     cycle_life_in_rpt_units = compute_cycle_life(cap_series)
-    return {
+    nominal_cap = nominal_capacity_Ah if nominal_capacity_Ah is not None else float(cap_series.iloc[0])
+
+    record = {
         "cell_id": cell_id,
-        "nominal_capacity_Ah": float(cap_series.iloc[0]),  # rpt0's discharge_cap
+        "nominal_capacity_Ah": nominal_cap,
         "cycle_life_rpt_units": cycle_life_in_rpt_units,
-        "cycle_life_efc_units": None,  # TBD - RPT-to-EFC mapping still unresolved
+        "cycle_life_efc_units": None,
+        "efc50_rpt_before": None,
+        "efc50_rpt_after": None,
+        "efc50_interp_weight": None,
     }
+
+    if parquet_path is not None:
+        efc_per_rpt = compute_efc_per_rpt(parquet_path, nominal_cap)
+        if cycle_life_in_rpt_units in efc_per_rpt.index:
+            record["cycle_life_efc_units"] = float(efc_per_rpt.loc[cycle_life_in_rpt_units])
+        rpt_before, rpt_after, weight = find_bracketing_rpts(efc_per_rpt, target_efc)
+        record["efc50_rpt_before"] = int(rpt_before)
+        record["efc50_rpt_after"] = int(rpt_after)
+        record["efc50_interp_weight"] = float(weight)
+
+    return record
 
 
 # ---------------------------------------------------------------------------

@@ -9,34 +9,35 @@ established for cell 019:
     <cell_id>_single_parquet_with_soc_and_corrections.parquet
     <cell_id>_dchg_cap_rpt.xlsx
 
-*** KNOWN LIMITATION - read before using cycle_life_rpt_units ***
-cycle_life is reported in RPT-INDEX units ("reached 90% of initial capacity
-by RPT N"), NOT equivalent full cycles. We tried to convert RPT number to
-EFC count using the parquet's total_dischg_thrgh_ah_rounded column, but it
-gave physically implausible values (large negative numbers) for cell 019,
-so that conversion is left unresolved rather than guessed at. If you figure
-out the right way to get EFC counts (e.g. from other metadata, or from
-understanding what that throughput column actually represents), the fix
-goes in build_farasis_cell_record() in parsers.py.
-
-Only RPT0's curve is extracted right now (not RPT-at-50-EFC), for the same
-reason - we don't know which RPT number corresponds to ~50 EFC yet.
+*** UPDATED cycle-50 handling ***
+Per the paper: "the feature at the 50th equivalent full cycle is generally
+obtained by interpolating between the features corresponding to the two
+nearest reference performance tests before and after it." So this script
+no longer extracts a single "cycle 50" RPT curve - it extracts BOTH
+bracketing RPTs (e.g. RPT0 and RPT1, if EFC 50 falls between them, which
+is common - a single round of cycling for cell 019 covers ~69 EFC, more
+than 50), plus the interpolation weight between them. Turning that into
+an actual "EFC50 feature" means computing your scalar feature(s) from each
+bracketing RPT's curve separately, then combining them with:
+    interpolated = (1 - weight) * feature[rpt_before] + weight * feature[rpt_after]
+This script does NOT do that combination itself, since it depends on which
+features you actually want - it hands you both raw curves and the weight.
 
 Usage:
     python build_farasis_test_set.py /path/to/farasis/raw/files/
 """
 
 import sys
-import os
 from pathlib import Path
 
 import pandas as pd
 
-from parsers import parse_farasis_rpt_metadata, parse_farasis_rpt_curve, build_farasis_cell_record
-
+from parsers import parse_farasis_rpt_metadata, parse_farasis_rpt_curve, build_farasis_cell_record, extract_primary_charging_curve
 
 DATA_ROOT = Path(f"/work3/claho/battery_datasets")
-OUTPUT_DIR = Path(f"/work3/claho/battery_datasets/processed")
+OUTPUT_DIR = Path(f"/work3/claho/battery_datasets/processed/pouch_cells")
+
+TARGET_EFC = 50
 
 
 def find_cell_pairs(raw_dir: Path):
@@ -54,7 +55,7 @@ def find_cell_pairs(raw_dir: Path):
 
 
 def main(raw_dir: str):
-    raw_dir = DATA_ROOT / raw_dir
+    raw_dir = Path(raw_dir)
     OUTPUT_DIR.mkdir(exist_ok=True)
 
     complete, incomplete = find_cell_pairs(raw_dir)
@@ -65,28 +66,64 @@ def main(raw_dir: str):
 
     metadata_rows = []
     rpt0_frames = []
+    efc50_before_frames = []
+    efc50_after_frames = []
+
 
     for cell_id, files in complete.items():
         print(f"[{cell_id}]")
         rpt_meta = parse_farasis_rpt_metadata(files["metadata"])
-        record = build_farasis_cell_record(cell_id, rpt_meta)
+        record = build_farasis_cell_record(
+            cell_id, rpt_meta, parquet_path=str(files["parquet"]), target_efc=TARGET_EFC
+        )
         metadata_rows.append(record)
         print(f"  nominal_capacity_Ah={record['nominal_capacity_Ah']:.2f}, "
-              f"cycle_life_rpt_units={record['cycle_life_rpt_units']}")
+              f"cycle_life_rpt_units={record['cycle_life_rpt_units']}, "
+              f"cycle_life_efc_units={record['cycle_life_efc_units']:.1f}")
+        print(f"  EFC{TARGET_EFC} brackets: RPT{record['efc50_rpt_before']} <-> "
+              f"RPT{record['efc50_rpt_after']} (weight={record['efc50_interp_weight']:.3f})")
 
-        curve = parse_farasis_rpt_curve(files["parquet"], rpt_number=12)
-        curve["cell_id"] = cell_id
-        rpt0_frames.append(curve)
-        print(f"  RPT0 curve: {len(curve)} rows")
+       
+        curve0 = parse_farasis_rpt_curve(files["parquet"], rpt_number=0)
+        efc0 = extract_primary_charging_curve(curve0) # Extract the charging curve
+        efc0["cell_id"] = cell_id
+        rpt0_frames.append(efc0)
+
+        rpt_before, rpt_after = record["efc50_rpt_before"], record["efc50_rpt_after"]
+
+        curve_before = parse_farasis_rpt_curve(files["parquet"], rpt_number=rpt_before)
+        efc50_before = extract_primary_charging_curve(curve_before) # Extract the charging curve
+        efc50_before["cell_id"] = cell_id
+        efc50_before_frames.append(efc50_before)
+        print(f"  Efc 50 before step number: {efc50_before["step_no"].iloc[0]}")
+
+        if rpt_after != rpt_before:
+            curve_after = parse_farasis_rpt_curve(files["parquet"], rpt_number=rpt_after)
+            efc50_after = extract_primary_charging_curve(curve_after) # Extract the charging curve
+            print(f"  Efc 50 after step number: {efc50_after["step_no"].iloc[0]}")
+            efc50_after["cell_id"] = cell_id
+            efc50_after_frames.append(efc50_after) 
+        print(f"  RPT0 curve: {len(efc0)} rows, "
+              f"EFC{TARGET_EFC}-before curve: {len(efc50_before)} rows, "
+              f"EFC{TARGET_EFC}-after curve: {len(efc50_after)} rows")
 
     metadata_df = pd.DataFrame(metadata_rows)
     metadata_df.to_csv(OUTPUT_DIR / "farasis_cell_metadata.csv", index=False)
-    print(f"\nMetadata -> {OUTPUT_DIR / 'farasis_cell_metadata_12.csv'}")
+    print(f"\nMetadata (includes efc50 bracketing RPTs + weight per cell) -> "
+          f"{OUTPUT_DIR / 'farasis_cell_metadata.csv'}")
 
     if rpt0_frames:
-        all_rpt0 = pd.concat(rpt0_frames, ignore_index=True)
-        all_rpt0.to_parquet(OUTPUT_DIR / "farasis_rpt0_curves.parquet", index=False)
-        print(f"RPT0 curves -> {OUTPUT_DIR / 'farasis_rpt12_curves.parquet'}")
+        pd.concat(rpt0_frames, ignore_index=True).to_parquet(OUTPUT_DIR / "farasis_rpt0_curves.parquet", index=False)
+        print(f"RPT0 curves -> {OUTPUT_DIR / 'farasis_rpt0_curves.parquet'}")
+    if efc50_before_frames:
+        pd.concat(efc50_before_frames, ignore_index=True).to_parquet(
+            OUTPUT_DIR / "farasis_efc50_before_curves.parquet", index=False)
+        print(f"EFC{TARGET_EFC}-before curves -> {OUTPUT_DIR / 'farasis_efc50_before_curves.parquet'}")
+    if efc50_after_frames:
+        pd.concat(efc50_after_frames, ignore_index=True).to_parquet(
+            OUTPUT_DIR / "farasis_efc50_after_curves.parquet", index=False)
+        print(f"EFC{TARGET_EFC}-after curves -> {OUTPUT_DIR / 'farasis_efc50_after_curves.parquet'}")
+
 
 
 if __name__ == "__main__":
