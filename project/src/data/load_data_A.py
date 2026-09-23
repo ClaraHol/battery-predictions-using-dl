@@ -35,8 +35,10 @@ n = time.shape[0]
 frac = 0.01
 num_points = int(np.ceil(n*frac))
 
-upper =  int(1.05*1e6)
-lower =  int(1.01*1e6)
+
+lower =  0
+upper =  num_points
+
 
 time = time[lower:upper]
 voltage = voltage[lower:upper]
