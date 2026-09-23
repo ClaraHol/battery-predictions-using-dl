@@ -24,12 +24,12 @@ from pathlib import Path
 
 import pandas as pd
 
-from parsers import (
+from project.src.data.data_processing.parsers import (
     parse_cmu_vtc6, parse_vtc5a_mat, parse_lgmj1,
     parse_samsung25r, parse_samsung25r_filename,
 )
-from process_cell import process_cell
-from config_and_cleaning import apply_three_step_cleaning
+from project.src.data.data_processing.process_cell import process_cell
+from project.src.data.data_processing.config_and_cleaning import apply_three_step_cleaning
 
 DATA_ROOT = Path(f"/work3/{os.environ.get('USER', '')}/battery_datasets")
 OUTPUT_DIR = Path(f"/work3/{os.environ.get('USER', '')}/battery_datasets/processed")

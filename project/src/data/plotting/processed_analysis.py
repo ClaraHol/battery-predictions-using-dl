@@ -6,8 +6,8 @@ import glob
 from pathlib import Path
 import os
 
-DATA_ROOT = Path(f"/work3/claho/battery_datasets/processed/")
-file = "farasis_rpt0_curves.parquet"
+DATA_ROOT = Path(f"/work3/claho/battery_datasets/processed/pouch_cells")
+file = "farasis_efc0_curves.parquet"
 file_name = file.split(".")[0]
 
 OUTPUT_DIR = Path(f"project/reports/figures/{file_name}")
@@ -20,8 +20,10 @@ data=pq.read_table(loadpath).to_pandas()
 print(data.head())
 
 
-fig, ax = plt.subplots(figsize=(14, 6))
+
 for cell_id, group in data.groupby("cell_id"):
+    fig, ax = plt.subplots(figsize=(14, 6))
+    print(f"Plotting voltage for for {cell_id}")
     
     group["time_step"] = np.array(group["time_s"]).cumsum()/36000
     group["time_step"] = group["time_step"] - group["time_step"].min()
@@ -66,4 +68,4 @@ for cell_id, group in data.groupby("cell_id"):
     ax.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
-    plt.savefig(OUTPUT_DIR/f"{file_name}_cell_{cell_id}")
+    plt.savefig(OUTPUT_DIR/f"{cell_id}")

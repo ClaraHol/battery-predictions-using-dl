@@ -8,7 +8,7 @@ parsers.py) and produces:
 """
 
 import pandas as pd
-from config_and_cleaning import build_cell_record, compute_cycle_life, compute_c_rate
+from project.src.data.data_processing.config_and_cleaning import build_cell_record, compute_cycle_life, compute_c_rate
 
 
 def process_cell(df: pd.DataFrame, cell_id: str, source_dataset: str, efc_target: int = 50):
@@ -19,7 +19,7 @@ def process_cell(df: pd.DataFrame, cell_id: str, source_dataset: str, efc_target
     (e.g. the cell died before reaching cycle 50 - still worth keeping the
     metadata row, just without an efc50 snapshot).
     """
-    from config_and_cleaning import NOMINAL_CAPACITY_AH
+    from project.src.data.data_processing.config_and_cleaning import NOMINAL_CAPACITY_AH
 
     nominal_cap = NOMINAL_CAPACITY_AH[source_dataset]
 
