@@ -31,8 +31,8 @@ from project.src.data.data_processing.parsers import (
 from project.src.data.data_processing.process_cell import process_cell
 from project.src.data.data_processing.config_and_cleaning import apply_three_step_cleaning
 
-DATA_ROOT = Path(f"/work3/{os.environ.get('USER', '')}/battery_datasets")
-OUTPUT_DIR = Path(f"/work3/{os.environ.get('USER', '')}/battery_datasets/processed")
+DATA_ROOT = Path(f"/work3/claho/battery_datasets")
+OUTPUT_DIR = Path(f"/work3/claho/battery_datasets/processed")
 EFC_TARGET = 50
 
 
