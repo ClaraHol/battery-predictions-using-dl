@@ -1,6 +1,7 @@
 # Virtual enviroment
 .venv
 
+project/models/sim_chunks
 outputs/
 # Byte-compiled / optimized / DLL files
 __pycache__/

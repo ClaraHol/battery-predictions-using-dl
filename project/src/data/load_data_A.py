@@ -8,7 +8,9 @@ from pathlib import Path
 scratch_dir = Path("/work3/claho/battery_datasets/lg_mj1")
 # file_dir = "DrivingAgeing_T25_SOC10-90_Vito_Cell88_AllData"
 # file_dir = "Cycl_T25_SOC10-90_Dch0.5C_Ch0.5C_Vito_Cell78_AllData"
-file_dir = "Cycl_T25_SOC10-90_Dch1.5C_Ch1.0C_Vito_Cell85_AllData"
+# file_dir = "Cycl_T25_SOC10-90_Dch1.5C_Ch1.0C_Vito_Cell85_AllData"
+# file_dir = "Cycl_T45_SOC10-90_Dch0.5C_Ch0.5C_Vito_Cell63_AllData"
+file_dir = "DrivingAgeing_T25_SOC70-90_Vito_Cell86_AllData"
 # Single file
 
 df = pd.read_csv(scratch_dir / (file_dir +".csv"))
@@ -35,8 +37,10 @@ n = time.shape[0]
 frac = 0.01
 num_points = int(np.ceil(n*frac))
 
-upper =  int(1.05*1e6)
-lower =  int(1.01*1e6)
+
+lower =  648333 - 5000
+upper =  648347
+
 
 time = time[lower:upper]
 voltage = voltage[lower:upper]
@@ -68,39 +72,3 @@ output_dir = Path("project/reports/figures/LG_MJ1")
 output_dir.mkdir(parents=True, exist_ok=True)
 pyplot.savefig(output_dir / "voltage_vs_time.png", dpi=300)
 pyplot.close()
-
-# Plot charge and discharge capacity as a function of time.
-figure, axes = pyplot.subplots(1, 2, figsize=(12, 5))
-
-axes[0].plot(time, charge_cap_Ah, label="Charge")
-axes[0].plot(time, discharge_cap_Ah, label="Discharge")
-axes[0].set_xlabel("Time Seconds")
-axes[0].set_ylabel("Capacity Ah")
-axes[0].set_title("Charge and Discharge Capacity vs. Time")
-axes[0].legend()
-axes[0].grid(True)
-
-axes[1].plot(time, charge_cap_Wh, label="Charge")
-axes[1].plot(time, discharge_cap_Wh, label="Discharge")
-axes[1].set_xlabel("Time Seconds")
-axes[1].set_ylabel("Capacity Wh")
-axes[1].set_title("Charge and Discharge Energy vs. Time")
-axes[1].legend()
-axes[1].grid(True)
-
-pyplot.tight_layout()
-pyplot.savefig(output_dir / "charge_discharge_capacity_vs_time.png", dpi=300)
-pyplot.close()
-
-# Plot step as a function of time.
-figure, axes = pyplot.subplots(figsize=(12, 5))
-axes.step(time, step, where="post")
-axes.set_xlabel("Time Seconds")
-axes.set_ylabel("Step")
-axes.set_title("Step vs. Time")
-axes.grid(True)
-
-pyplot.tight_layout()
-pyplot.savefig(output_dir / f"{file_dir}_step_vs_time.png", dpi=300)
-pyplot.close()
-
