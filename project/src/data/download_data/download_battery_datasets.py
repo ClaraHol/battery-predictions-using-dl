@@ -21,19 +21,20 @@ Confidence per source:
                                     password shown on the landing page.
                                     Fill in NODE_ID / RSYNC_PASSWORD below.
   - Battery Archive (A123-M1A,   : Same as 4TU.ResearchData.
-    LG-HG2, Sandia SNL study)      
+    LG-HG2, Sandia SNL study)
 
 Usage:
     python download_battery_datasets.py            # downloads everything configured
     python download_battery_datasets.py samsung_25r # downloads just one dataset
 """
+
 import csv
 import hashlib
 import os
 import subprocess
 import sys
-from pathlib import Path
 import time
+from pathlib import Path
 
 import requests
 
@@ -74,13 +75,17 @@ def stream_download(url: str, dest_path: Path, expected_md5: str | None = None):
                 written += len(chunk)
                 if total:
                     pct = 100 * written / total
-                    print(f"\r        {dest_path.name}: {pct:5.1f}%", end="", flush=True)
+                    print(
+                        f"\r        {dest_path.name}: {pct:5.1f}%", end="", flush=True
+                    )
         print()
     if expected_md5:
         got = md5sum(dest_path)
         if got != expected_md5:
-            print(f"  [WARN] checksum mismatch for {dest_path.name} "
-                  f"(got {got}, expected {expected_md5})")
+            print(
+                f"  [WARN] checksum mismatch for {dest_path.name} "
+                f"(got {got}, expected {expected_md5})"
+            )
 
 
 # ===========================================================================
@@ -107,7 +112,7 @@ def fetch_samsung_25r():
 #    (KiltHub runs on Figshare, which has a stable public API)
 # ===========================================================================
 
-# Must be dowloaded manually at 
+# Must be dowloaded manually at
 # https://kilthub.cmu.edu/articles/dataset/eVTOL_Battery_Dataset/14226830?file=26855063
 # and tranfered via sftp to the HPC cluster (use username@transfer.gbar.dtu.dk)
 
@@ -115,18 +120,18 @@ def fetch_samsung_25r():
 # 3. LG-MJ1 -- Trad, VITO/EnergyVille, hosted on 4TU.ResearchData
 # ===========================================================================
 FOURTU_DOI = "10.4121/13739296"
- 
+
 # Paste the "download entire dataset" link from the 4TU dataset page here.
 FOURTU_BULK_URL = "https://data.4tu.nl/ndownloader/items/e19fe272-4f46-450c-9125-6545c4c1a98b/versions/1"
 FOURTU_BULK_FILENAME = "lg_mj1_full_dataset.zip"
- 
+
 # Fallback: if 4TU only gives you per-file links instead of one bulk zip,
 # list them here and fetch_lg_mj1() will use these instead.
 DIRECT_4TU_FILES: list[tuple[str, str]] = [
     # ("https://data.4tu.nl/.../lg_mj1_cell01.csv", "lg_mj1_cell01.csv"),
 ]
- 
- 
+
+
 def fetch_lg_mj1():
     dest_dir = DEST_ROOT / "lg_mj1"
     print(f"[LG-MJ1 | 4TU.ResearchData {FOURTU_DOI}]")
@@ -140,12 +145,13 @@ def fetch_lg_mj1():
     landing = requests.get(
         f"https://doi.org/{FOURTU_DOI}", timeout=30, allow_redirects=True
     )
-    print(f"  [WARN] No download URL configured yet.")
+    print("  [WARN] No download URL configured yet.")
     print(f"         DOI resolved to: {landing.url}")
-    print("         Open that page, copy either the 'download entire dataset' "
-          "link into FOURTU_BULK_URL, or individual file links into "
-          "DIRECT_4TU_FILES, in this script.")
- 
+    print(
+        "         Open that page, copy either the 'download entire dataset' "
+        "link into FOURTU_BULK_URL, or individual file links into "
+        "DIRECT_4TU_FILES, in this script."
+    )
 
 
 # ===========================================================================
@@ -159,13 +165,16 @@ def fetch_sony_vtc5a():
     dest_dir = DEST_ROOT / "sony_vtc5a"
     print("[Sony-VTC5A | TUM mediaTUM]")
     if not MEDIATUM_NODE_ID:
-        print("  [WARN] MEDIATUM_NODE_ID not set. Find the Wildfeuer et al. "
-              "dataset on mediatum.ub.tum.de, open its page, and copy the "
-              "module ID + rsync password shown under 'Technische Hinweise'.")
+        print(
+            "  [WARN] MEDIATUM_NODE_ID not set. Find the Wildfeuer et al. "
+            "dataset on mediatum.ub.tum.de, open its page, and copy the "
+            "module ID + rsync password shown under 'Technische Hinweise'."
+        )
         return
     dest_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
-        "rsync", "-avzP",
+        "rsync",
+        "-avzP",
         f"rsync://m{MEDIATUM_NODE_ID}@dataserv.ub.tum.de/m{MEDIATUM_NODE_ID}/",
         str(dest_dir) + "/",
     ]
@@ -215,8 +224,6 @@ CELL_IDS = [
     "SNL_18650_LFP_25C_40-60_0.5/0.5C_b",
     "SNL_18650_LFP_25C_40-60_0.5/3C_a",
     "SNL_18650_LFP_25C_40-60_0.5/3C_b",
-
-
     # # NCA
     # "SNL_18650_NCA_25C_20-80_0.5/0.5C_a",
     # "SNL_18650_NCA_25C_20-80_0.5/0.5C_b",
@@ -224,7 +231,6 @@ CELL_IDS = [
     # "SNL_18650_NCA_25C_20-80_0.5/0.5C_d",
     # "SNL_18650_NCA_25C_40-60_0.5/0.5C_a",
     # "SNL_18650_NCA_25C_40-60_0.5/0.5C_b",
-
     # # NMC
     "SNL_18650_NMC_25C_20-80_0.5/0.5C_a",
     "SNL_18650_NMC_25C_20-80_0.5/0.5C_b",
@@ -247,6 +253,7 @@ HEADERS = {
 # --------------------------------------------------
 # Query function
 # --------------------------------------------------
+
 
 def run_query(query_id, parameters):
     payload = {
@@ -277,9 +284,7 @@ def run_query(query_id, parameters):
             # Asynchronous job
             # ----------------------------------------
             if "job" not in result:
-                raise RuntimeError(
-                    f"Unexpected response:\n{result}"
-                )
+                raise RuntimeError(f"Unexpected response:\n{result}")
 
             job_id = result["job"]["id"]
             print(f"        Async job: {job_id}")
@@ -300,8 +305,7 @@ def run_query(query_id, parameters):
 
                 if status == 3:
                     query_result_id = job["query_result_id"]
-                    print(f"        Job finished (result {query_result_id})"
-                    )
+                    print(f"        Job finished (result {query_result_id})")
                     result_response = requests.get(
                         f"https://database.batteryarchive.org/api/query_results/{query_result_id}",
                         headers=HEADERS,
@@ -327,12 +331,14 @@ def run_query(query_id, parameters):
                 wait_time = 5 * attempt
                 print(f"        Retrying in {wait_time} seconds...")
                 time.sleep(wait_time)
-            else: raise
+            else:
+                raise
 
 
 # --------------------------------------------------
 # Progress handling
 # --------------------------------------------------
+
 
 def load_progress():
 
@@ -340,22 +346,37 @@ def load_progress():
         return {}
 
     progress = {}
-    with open(PROGRESS_FILE, "r", newline="", encoding="utf-8", ) as f:
+    with open(
+        PROGRESS_FILE,
+        "r",
+        newline="",
+        encoding="utf-8",
+    ) as f:
         reader = csv.DictReader(f)
 
         for row in reader:
-            progress[row["cell_id"]] = {"last_cycle": int(row["last_cycle"]), "status": row["status"],}
+            progress[row["cell_id"]] = {
+                "last_cycle": int(row["last_cycle"]),
+                "status": row["status"],
+            }
     return progress
 
 
 def save_progress(progress):
 
-    PROGRESS_FILE.parent.mkdir(parents=True, exist_ok=True,)
+    PROGRESS_FILE.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
     temp_file = PROGRESS_FILE.with_suffix(".tmp")
 
-    with open(temp_file, "w", newline="", encoding="utf-8", ) as f:
-
+    with open(
+        temp_file,
+        "w",
+        newline="",
+        encoding="utf-8",
+    ) as f:
         writer = csv.DictWriter(
             f,
             fieldnames=[
@@ -368,28 +389,29 @@ def save_progress(progress):
         writer.writeheader()
 
         for cell_id, info in progress.items():
-            writer.writerow({
-                "cell_id": cell_id,
-                "last_cycle": info["last_cycle"],
-                "status": info["status"],
-            })
+            writer.writerow(
+                {
+                    "cell_id": cell_id,
+                    "last_cycle": info["last_cycle"],
+                    "status": info["status"],
+                }
+            )
 
     # Atomic replacement
     temp_file.replace(PROGRESS_FILE)
-
 
 
 # ============================================================
 # Main downloader for Sandia SNL
 # ============================================================
 
+
 def fetch_sandia_snl():
 
     dest_dir = DEST_ROOT / "sandia_snl"
-    progress = load_progress()      
+    progress = load_progress()
 
     for i, cell_id in enumerate(CELL_IDS, start=1):
-
         print()
         print("=" * 80)
         print(f"[{i}/{len(CELL_IDS)}] {cell_id}")
@@ -399,7 +421,7 @@ def fetch_sandia_snl():
         # Check whether this cell was already completed
         # ----------------------------------------------------
 
-        if (cell_id in progress and progress[cell_id]["status"] == "complete"):
+        if cell_id in progress and progress[cell_id]["status"] == "complete":
             print("    Already complete. Skipping.")
             continue
 
@@ -423,9 +445,8 @@ def fetch_sandia_snl():
         # Replace "/" because it would otherwise create
         # subdirectories.
         safe_name = cell_id.replace("/", "_")
-        output_file = (dest_dir / f"{safe_name}.csv")
+        output_file = dest_dir / f"{safe_name}.csv"
 
-        
         # ----------------------------------------------------
         # Determine whether we append or create
         # ----------------------------------------------------
@@ -438,7 +459,6 @@ def fetch_sandia_snl():
             newline="",
             encoding="utf-8",
         ) as csvfile:
-
             writer = csv.DictWriter(
                 csvfile,
                 fieldnames=[
@@ -487,7 +507,10 @@ def fetch_sandia_snl():
                     print(f"    Error: {e}")
                     print("    Stopping this cell.")
 
-                    progress[cell_id] = {"last_cycle": j - 1,"status": "failed",}
+                    progress[cell_id] = {
+                        "last_cycle": j - 1,
+                        "status": "failed",
+                    }
 
                     save_progress(progress)
                     break
@@ -499,7 +522,7 @@ def fetch_sandia_snl():
                 # --------------------------------------------
 
                 if not rows:
-                    print( "        No rows returned.")
+                    print("        No rows returned.")
                     print(f"        End of data around cycle {cycle_1}.")
 
                     progress[cell_id] = {
@@ -515,28 +538,25 @@ def fetch_sandia_snl():
                 # --------------------------------------------
 
                 for row in rows:
-                    label = row.get( "label", "",)
-
-                    # Extract cycle from label
-                    cycle = (
-                        label.rsplit(" ", 1)[-1]
-                        if label
-                        else None
+                    label = row.get(
+                        "label",
+                        "",
                     )
 
-                    writer.writerow({
-                        "cell_id": cell_id,
-                        "cycle": cycle,
-                        "cycle_time": row.get(
-                            "cycle_time"
-                        ),
-                        "v": row.get("v"),
-                        "row_m": row.get(
-                            "row_m"
-                        ),
-                        "label": label,
-                        "row": row.get("row"),
-                    })
+                    # Extract cycle from label
+                    cycle = label.rsplit(" ", 1)[-1] if label else None
+
+                    writer.writerow(
+                        {
+                            "cell_id": cell_id,
+                            "cycle": cycle,
+                            "cycle_time": row.get("cycle_time"),
+                            "v": row.get("v"),
+                            "row_m": row.get("row_m"),
+                            "label": label,
+                            "row": row.get("row"),
+                        }
+                    )
 
                 # --------------------------------------------
                 # Force data to disk
@@ -548,11 +568,10 @@ def fetch_sandia_snl():
                 # Checkpoint
                 # --------------------------------------------
 
-                last_cycle_this_block = min( j + BLOCK_SIZE - 1, MAX_CYCLE)
+                last_cycle_this_block = min(j + BLOCK_SIZE - 1, MAX_CYCLE)
 
                 progress[cell_id] = {
-                    "last_cycle":
-                        last_cycle_this_block,
+                    "last_cycle": last_cycle_this_block,
                     "status": "in_progress",
                 }
 
@@ -565,11 +584,10 @@ def fetch_sandia_snl():
                 time.sleep(0.5)
 
             else:
-
                 # The for loop reached MAX_CYCLE
                 # without breaking.
 
-                progress[cell_id] = { "last_cycle": MAX_CYCLE, "status": "complete"}
+                progress[cell_id] = {"last_cycle": MAX_CYCLE, "status": "complete"}
 
                 save_progress(progress)
 
@@ -585,17 +603,16 @@ def fetch_sandia_snl():
 # Driver
 # --------------------------------------------------------------------------
 DATASETS = {
-    #"samsung_25r": fetch_samsung_25r,
-    #"lg_mj1": fetch_lg_mj1,
-    #"sony_vtc5a": fetch_sony_vtc5a,
+    # "samsung_25r": fetch_samsung_25r,
+    # "lg_mj1": fetch_lg_mj1,
+    # "sony_vtc5a": fetch_sony_vtc5a,
     "sandia_snl": fetch_sandia_snl,
 }
 
 if __name__ == "__main__":
     DEST_ROOT.mkdir(parents=True, exist_ok=True)
     print(f"Downloading into: {DEST_ROOT}\n")
-    
-    
+
     requested = sys.argv[1:] or list(DATASETS.keys())
     for name in requested:
         if name not in DATASETS:
@@ -605,8 +622,7 @@ if __name__ == "__main__":
         print()
 
     print("Done. Contents of", DEST_ROOT, ":")
-    
+
     for p in sorted(DEST_ROOT.rglob("*")):
         if p.is_file():
             print(" ", p.relative_to(DEST_ROOT), f"({p.stat().st_size / 1e6:.1f} MB)")
-    

@@ -8,10 +8,17 @@ parsers.py) and produces:
 """
 
 import pandas as pd
-from project.src.data.data_processing.config_and_cleaning import build_cell_record, compute_cycle_life, compute_c_rate
+
+from project.src.data.data_processing.config_and_cleaning import (
+    build_cell_record,
+    compute_c_rate,
+    compute_cycle_life,
+)
 
 
-def process_cell(df: pd.DataFrame, cell_id: str, source_dataset: str, efc_target: int = 50):
+def process_cell(
+    df: pd.DataFrame, cell_id: str, source_dataset: str, efc_target: int = 50
+):
     """
     df: standard-schema DataFrame for one cell (see parsers.py STANDARD_COLUMNS)
     Returns (metadata_dict, efc0_df, efc_target_df)

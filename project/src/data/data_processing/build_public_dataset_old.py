@@ -18,21 +18,25 @@ dataset shows "0 files found", fix its pattern (print(list(Path(...).glob))
 is your friend) rather than assuming something's broken elsewhere.
 """
 
-import os
 import traceback
 from pathlib import Path
 
 import pandas as pd
 
+from project.src.data.data_processing.config_and_cleaning import (
+    apply_three_step_cleaning,
+)
 from project.src.data.data_processing.parsers import (
-    parse_cmu_vtc6, parse_vtc5a_mat, parse_lgmj1,
-    parse_samsung25r, parse_samsung25r_filename,
+    parse_cmu_vtc6,
+    parse_lgmj1,
+    parse_samsung25r,
+    parse_samsung25r_filename,
+    parse_vtc5a_mat,
 )
 from project.src.data.data_processing.process_public_cells import process_cell
-from project.src.data.data_processing.config_and_cleaning import apply_three_step_cleaning
 
-DATA_ROOT = Path(f"/work3/claho/battery_datasets")
-OUTPUT_DIR = Path(f"/work3/claho/battery_datasets/processed")
+DATA_ROOT = Path("/work3/claho/battery_datasets")
+OUTPUT_DIR = Path("/work3/claho/battery_datasets/processed")
 EFC_TARGET = 50
 
 
@@ -76,8 +80,10 @@ def main():
     tum_dir = DATA_ROOT / "sony_vtc5a_raw"
     tum_files = list(tum_dir.glob("**/*.mat"))
     tum_files = [f for f in tum_files if "calendar" not in str(f).lower()]
-    print(f"[tum] found {len(tum_files)} cyclic/dynamic files under {tum_dir} "
-          f"(calendar-aging files excluded)")
+    print(
+        f"[tum] found {len(tum_files)} cyclic/dynamic files under {tum_dir} "
+        f"(calendar-aging files excluded)"
+    )
     for f in tum_files:
         cell_id = f"tum_{f.stem}"
         try:
@@ -101,7 +107,7 @@ def main():
         try:
             df = parse_lgmj1(f)
         except Exception as e:
-             errors.append((cell_id, "lg_mj1", str(e), traceback.format_exc()))
+            errors.append((cell_id, "lg_mj1", str(e), traceback.format_exc()))
         meta, efc0, efc50 = safe_process(df, cell_id, "elt", errors)
         if meta:
             metadata_rows.append(meta)
@@ -116,9 +122,13 @@ def main():
     for f in tongji_files:
         cell_id = f"tongji_{f.stem}"
         try:
-            temp_C, charge_c_nameplate, discharge_c_nameplate = parse_samsung25r_filename(f.name)
+            temp_C, charge_c_nameplate, discharge_c_nameplate = (
+                parse_samsung25r_filename(f.name)
+            )
             df = parse_samsung25r(f)
-            df["temp_C"] = temp_C  # filename-derived, more reliable than any per-row estimate
+            df["temp_C"] = (
+                temp_C  # filename-derived, more reliable than any per-row estimate
+            )
         except Exception as e:
             errors.append((cell_id, "tongji", str(e), traceback.format_exc()))
             continue
@@ -157,13 +167,17 @@ def main():
 
     # --- assemble + clean + save ---
     if not metadata_rows:
-        print("\nNo cells were successfully parsed. Check the errors below and "
-              "the directory patterns at the top of this script.")
+        print(
+            "\nNo cells were successfully parsed. Check the errors below and "
+            "the directory patterns at the top of this script."
+        )
     else:
         cells_df = pd.DataFrame(metadata_rows)
         cells_df.to_csv(OUTPUT_DIR / "cell_metadata_all.csv", index=False)
-        print(f"\nParsed {len(cells_df)} cells total -> "
-              f"{OUTPUT_DIR / 'cell_metadata_all.csv'}")
+        print(
+            f"\nParsed {len(cells_df)} cells total -> "
+            f"{OUTPUT_DIR / 'cell_metadata_all.csv'}"
+        )
 
         cleaned_df = apply_three_step_cleaning(cells_df)
         cleaned_df.to_csv(OUTPUT_DIR / "cell_metadata_cleaned.csv", index=False)
@@ -175,7 +189,9 @@ def main():
             ignore_index=True,
         )
         efc0_all.to_parquet(OUTPUT_DIR / "efc0_curves.parquet", index=False)
-        print(f"efc0 curves for surviving cells -> {OUTPUT_DIR / 'efc0_curves.parquet'}")
+        print(
+            f"efc0 curves for surviving cells -> {OUTPUT_DIR / 'efc0_curves.parquet'}"
+        )
 
         if efc50_frames:
             efc50_all = pd.concat(
@@ -183,15 +199,20 @@ def main():
                 ignore_index=True,
             )
             efc50_all.to_parquet(OUTPUT_DIR / "efc50_curves.parquet", index=False)
-            print(f"efc50 curves for surviving cells -> {OUTPUT_DIR / 'efc50_curves.parquet'}")
-   
+            print(
+                f"efc50 curves for surviving cells -> {OUTPUT_DIR / 'efc50_curves.parquet'}"
+            )
 
     if errors:
-        err_df = pd.DataFrame(errors, columns=["cell_id", "source_dataset", "error", "traceback"])
+        err_df = pd.DataFrame(
+            errors, columns=["cell_id", "source_dataset", "error", "traceback"]
+        )
         err_df.to_csv(OUTPUT_DIR / "parse_errors.csv", index=False)
-        print(f"\n{len(errors)} files failed to parse - see "
-              f"{OUTPUT_DIR / 'parse_errors.csv'} for details "
-              f"(first column has the short error message).")
+        print(
+            f"\n{len(errors)} files failed to parse - see "
+            f"{OUTPUT_DIR / 'parse_errors.csv'} for details "
+            f"(first column has the short error message)."
+        )
 
 
 if __name__ == "__main__":

@@ -1,23 +1,23 @@
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
-
 
 # ============================================================
 # USER SETTINGS
 # ============================================================
 
 
-
-DATA_ROOT = Path(f"/work3/claho/battery_datasets")
-INPUT_DIR = DATA_ROOT / "pouch_cells" /"test_data"
+DATA_ROOT = Path("/work3/claho/battery_datasets")
+INPUT_DIR = DATA_ROOT / "pouch_cells" / "test_data"
 BATTERY_TYPE = "PA-b1"
 
 
+PARQUET_FILE = (
+    INPUT_DIR / BATTERY_TYPE / "001_single_parquet_with_soc_and_corrections.parquet"
+)
 
-PARQUET_FILE = INPUT_DIR / BATTERY_TYPE / "001_single_parquet_with_soc_and_corrections.parquet"
-
-OUTPUT_DIR = DATA_ROOT/ "processed"/ "pouch_cells" / "rpt_extracted"
+OUTPUT_DIR = DATA_ROOT / "processed" / "pouch_cells" / "rpt_extracted"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 # Nominal capacity of the cell.
@@ -73,10 +73,7 @@ numeric_columns = [
 
 for col in numeric_columns:
     if col in df.columns:
-        df[col] = pd.to_numeric(
-            df[col],
-            errors="coerce"
-        )
+        df[col] = pd.to_numeric(df[col], errors="coerce")
 
 df = df.sort_values("time_stamp").reset_index(drop=True)
 
@@ -86,26 +83,19 @@ df = df.sort_values("time_stamp").reset_index(drop=True)
 # ============================================================
 
 print("\nRPT values:")
-print(
-    df["rpt"]
-    .dropna()
-    .unique()
-)
+print(df["rpt"].dropna().unique())
 
 
 # ============================================================
 # CREATE STEP SUMMARY
 # ============================================================
 
+
 def make_step_summary(df):
 
     rows = []
 
-    for (rpt, step), x in df.groupby(
-        ["rpt", "step_no"],
-        sort=True
-    ):
-
+    for (rpt, step), x in df.groupby(["rpt", "step_no"], sort=True):
         x = x.sort_values("time_stamp")
 
         if len(x) < 2:
@@ -114,9 +104,7 @@ def make_step_summary(df):
         t0 = x["time_stamp"].iloc[0]
         t1 = x["time_stamp"].iloc[-1]
 
-        duration_s = (
-            t1 - t0
-        ).total_seconds()
+        duration_s = (t1 - t0).total_seconds()
 
         current = x["current (A)"].values
 
@@ -125,110 +113,67 @@ def make_step_summary(df):
         # Mean current excluding NaN
         mean_current = np.nanmean(current)
 
-        mean_abs_current = np.nanmean(
-            np.abs(current)
-        )
+        mean_abs_current = np.nanmean(np.abs(current))
 
         # Estimate charge transferred using
         # trapezoidal integration.
-        time_s = (
-            x["time_stamp"] - t0
-        ).dt.total_seconds().values
+        time_s = (x["time_stamp"] - t0).dt.total_seconds().values
 
-        valid = (
-            np.isfinite(time_s) &
-            np.isfinite(current)
-        )
+        valid = np.isfinite(time_s) & np.isfinite(current)
 
         time_s = time_s[valid]
         current = current[valid]
 
         if len(time_s) > 1:
-
-            charge_Ah = np.trapezoid(
-                np.abs(current),
-                time_s
-            ) / 3600.0
+            charge_Ah = np.trapezoid(np.abs(current), time_s) / 3600.0
 
         else:
             charge_Ah = 0.0
 
-        rows.append({
-
-            "rpt": rpt,
-            "step_no": step,
-
-            "n_points": len(x),
-
-            "duration_s": duration_s,
-            "duration_min": duration_s / 60,
-
-            "mean_current_A": mean_current,
-            "mean_abs_current_A":
-                mean_abs_current,
-
-            "charge_Ah":
-                charge_Ah,
-
-            "start_voltage_V":
-                voltage[0],
-
-            "end_voltage_V":
-                voltage[-1],
-
-            "voltage_change_V":
-                voltage[-1] - voltage[0],
-
-            "start_soc":
-                x["soc"].iloc[0]
-                if "soc" in x
-                else np.nan,
-
-            "end_soc":
-                x["soc"].iloc[-1]
-                if "soc" in x
-                else np.nan,
-
-        })
+        rows.append(
+            {
+                "rpt": rpt,
+                "step_no": step,
+                "n_points": len(x),
+                "duration_s": duration_s,
+                "duration_min": duration_s / 60,
+                "mean_current_A": mean_current,
+                "mean_abs_current_A": mean_abs_current,
+                "charge_Ah": charge_Ah,
+                "start_voltage_V": voltage[0],
+                "end_voltage_V": voltage[-1],
+                "voltage_change_V": voltage[-1] - voltage[0],
+                "start_soc": x["soc"].iloc[0] if "soc" in x else np.nan,
+                "end_soc": x["soc"].iloc[-1] if "soc" in x else np.nan,
+            }
+        )
 
     return pd.DataFrame(rows)
 
 
 step_summary = make_step_summary(df)
 
-step_summary.to_csv(
-    OUTPUT_DIR / "rpt_step_summary.csv",
-    index=False
-)
+step_summary.to_csv(OUTPUT_DIR / "rpt_step_summary.csv", index=False)
 
-print(
-    "\nSaved step summary to:",
-    OUTPUT_DIR / "rpt_step_summary.csv"
-)
+print("\nSaved step summary to:", OUTPUT_DIR / "rpt_step_summary.csv")
 
 
 # ============================================================
 # IDENTIFY C/3 DISCHARGE STEP
 # ============================================================
 
+
 def find_c3_discharge(rpt_df):
 
     candidates = []
 
-    for step, x in rpt_df.groupby(
-        "step_no",
-        sort=True
-    ):
-
+    for step, x in rpt_df.groupby("step_no", sort=True):
         x = x.sort_values("time_stamp")
 
         if len(x) < 2:
             continue
 
-        t = (
-            x["time_stamp"] -
-            x["time_stamp"].iloc[0]
-        ).dt.total_seconds().values
+        t = (x["time_stamp"] - x["time_stamp"].iloc[0]).dt.total_seconds().values
 
         I = x["current (A)"].values
 
@@ -250,61 +195,36 @@ def find_c3_discharge(rpt_df):
 
         mean_current = np.nanmean(I)
 
-        mean_abs_current = np.nanmean(
-            np.abs(I)
-        )
+        mean_abs_current = np.nanmean(np.abs(I))
 
         # How close is this step to C/3?
         relative_error = (
-            abs(mean_abs_current -
-                EXPECTED_C3_CURRENT)
-            / EXPECTED_C3_CURRENT
+            abs(mean_abs_current - EXPECTED_C3_CURRENT) / EXPECTED_C3_CURRENT
         )
 
         # We also want a genuine discharge:
         # voltage should generally decrease.
-        voltage_change = (
-            V[-1] - V[0]
-        )
+        voltage_change = V[-1] - V[0]
 
         # SOC should generally decrease.
         soc_change = np.nan
 
         if "soc" in x:
+            soc_change = x["soc"].iloc[-1] - x["soc"].iloc[0]
 
-            soc_change = (
-                x["soc"].iloc[-1]
-                - x["soc"].iloc[0]
-            )
-
-        candidates.append({
-
-            "step_no": step,
-
-            "duration_s": duration_s,
-
-            "mean_current_A":
-                mean_current,
-
-            "mean_abs_current_A":
-                mean_abs_current,
-
-            "relative_current_error":
-                relative_error,
-
-            "voltage_change_V":
-                voltage_change,
-
-            "soc_change":
-                soc_change,
-
-            "start_voltage_V":
-                V[0],
-
-            "end_voltage_V":
-                V[-1],
-
-        })
+        candidates.append(
+            {
+                "step_no": step,
+                "duration_s": duration_s,
+                "mean_current_A": mean_current,
+                "mean_abs_current_A": mean_abs_current,
+                "relative_current_error": relative_error,
+                "voltage_change_V": voltage_change,
+                "soc_change": soc_change,
+                "start_voltage_V": V[0],
+                "end_voltage_V": V[-1],
+            }
+        )
 
     candidates = pd.DataFrame(candidates)
 
@@ -315,24 +235,14 @@ def find_c3_discharge(rpt_df):
     #
     # A decreasing voltage/SOC receives preference.
 
-    candidates["score"] = (
-        candidates["relative_current_error"]
-    )
+    candidates["score"] = candidates["relative_current_error"]
 
-    candidates.loc[
-        candidates["voltage_change_V"] >= 0,
-        "score"
-    ] += 10
+    candidates.loc[candidates["voltage_change_V"] >= 0, "score"] += 10
 
     if "soc_change" in candidates:
-        candidates.loc[
-            candidates["soc_change"] >= 0,
-            "score"
-        ] += 10
+        candidates.loc[candidates["soc_change"] >= 0, "score"] += 10
 
-    candidates = candidates.sort_values(
-        "score"
-    )
+    candidates = candidates.sort_values("score")
 
     selected_step = candidates.iloc[0]["step_no"]
 
@@ -347,62 +257,32 @@ selected_rpt_steps = []
 
 candidate_tables = []
 
-for rpt, rpt_df in df.groupby(
-    "rpt",
-    sort=True
-):
-
-    step, candidates = find_c3_discharge(
-        rpt_df
-    )
+for rpt, rpt_df in df.groupby("rpt", sort=True):
+    step, candidates = find_c3_discharge(rpt_df)
 
     if step is None:
-        print(
-            f"WARNING: no C/3 candidate found "
-            f"for RPT {rpt}"
-        )
+        print(f"WARNING: no C/3 candidate found for RPT {rpt}")
         continue
 
-    selected_rpt_steps.append({
-
-        "rpt": rpt,
-        "selected_step": step,
-
-        "mean_abs_current_A":
-            candidates.iloc[0][
-                "mean_abs_current_A"
-            ],
-
-        "duration_s":
-            candidates.iloc[0][
-                "duration_s"
-            ],
-
-        "start_voltage_V":
-            candidates.iloc[0][
-                "start_voltage_V"
-            ],
-
-        "end_voltage_V":
-            candidates.iloc[0][
-                "end_voltage_V"
-            ],
-
-    })
+    selected_rpt_steps.append(
+        {
+            "rpt": rpt,
+            "selected_step": step,
+            "mean_abs_current_A": candidates.iloc[0]["mean_abs_current_A"],
+            "duration_s": candidates.iloc[0]["duration_s"],
+            "start_voltage_V": candidates.iloc[0]["start_voltage_V"],
+            "end_voltage_V": candidates.iloc[0]["end_voltage_V"],
+        }
+    )
 
     candidates["rpt"] = rpt
 
     candidate_tables.append(candidates)
 
 
-selected_steps = pd.DataFrame(
-    selected_rpt_steps
-)
+selected_steps = pd.DataFrame(selected_rpt_steps)
 
-selected_steps.to_csv(
-    OUTPUT_DIR / "selected_c3_steps.csv",
-    index=False
-)
+selected_steps.to_csv(OUTPUT_DIR / "selected_c3_steps.csv", index=False)
 
 print("\nSelected C/3 steps:")
 print(selected_steps)
@@ -413,10 +293,8 @@ print(selected_steps)
 # EXTRACT VOLTAGE CURVE
 # ============================================================
 
-def extract_voltage_curve(
-    x,
-    n_points=200
-):
+
+def extract_voltage_curve(x, n_points=200):
 
     x = x.sort_values("time_stamp").copy()
 
@@ -424,10 +302,7 @@ def extract_voltage_curve(
     # Calculate cumulative discharged capacity
     # --------------------------------------------------------
 
-    time_s = (
-        x["time_stamp"] -
-        x["time_stamp"].iloc[0]
-    ).dt.total_seconds().values
+    time_s = (x["time_stamp"] - x["time_stamp"].iloc[0]).dt.total_seconds().values
 
     current = x["current (A)"].values
 
@@ -443,29 +318,15 @@ def extract_voltage_curve(
 
     dt = np.diff(time_s)
 
-    dq = (
-        0.5 *
-        (
-            abs_current[:-1] +
-            abs_current[1:]
-        ) *
-        dt /
-        3600.0
-    )
+    dq = 0.5 * (abs_current[:-1] + abs_current[1:]) * dt / 3600.0
 
-    q = np.concatenate([
-        [0],
-        np.cumsum(dq)
-    ])
+    q = np.concatenate([[0], np.cumsum(dq)])
 
     # --------------------------------------------------------
     # Remove duplicate q values
     # --------------------------------------------------------
 
-    unique_q, idx = np.unique(
-        q,
-        return_index=True
-    )
+    unique_q, idx = np.unique(q, return_index=True)
 
     voltage = voltage[idx]
 
@@ -487,10 +348,7 @@ def extract_voltage_curve(
     # Remove NaNs
     # --------------------------------------------------------
 
-    valid = (
-        np.isfinite(q_norm) &
-        np.isfinite(voltage)
-    )
+    valid = np.isfinite(q_norm) & np.isfinite(voltage)
 
     q_norm = q_norm[valid]
     voltage = voltage[valid]
@@ -499,26 +357,14 @@ def extract_voltage_curve(
     # Fixed grid
     # --------------------------------------------------------
 
-    grid = np.linspace(
-        0,
-        1,
-        n_points
-    )
+    grid = np.linspace(0, 1, n_points)
 
-    voltage_grid = np.interp(
-        grid,
-        q_norm,
-        voltage
-    )
+    voltage_grid = np.interp(grid, q_norm, voltage)
 
     return {
-
         "q_total_Ah": q[-1],
-
         "q_norm": grid,
-
         "voltage": voltage_grid,
-
     }
 
 
@@ -529,19 +375,12 @@ def extract_voltage_curve(
 rpt_curves = {}
 
 for _, row in selected_steps.iterrows():
-
     rpt = row["rpt"]
     step = row["selected_step"]
 
-    x = df[
-        (df["rpt"] == rpt) &
-        (df["step_no"] == step)
-    ].copy()
+    x = df[(df["rpt"] == rpt) & (df["step_no"] == step)].copy()
 
-    curve = extract_voltage_curve(
-        x,
-        N_CURVE_POINTS
-    )
+    curve = extract_voltage_curve(x, N_CURVE_POINTS)
 
     if curve is None:
         continue
@@ -556,19 +395,14 @@ for _, row in selected_steps.iterrows():
 rpt_features = []
 
 for rpt, curve in rpt_curves.items():
+    rpt_features.append(
+        {
+            "rpt": rpt,
+            "capacity_Ah": curve["q_total_Ah"],
+        }
+    )
 
-    rpt_features.append({
-
-        "rpt": rpt,
-
-        "capacity_Ah":
-            curve["q_total_Ah"],
-
-    })
-
-rpt_features = pd.DataFrame(
-    rpt_features
-)
+rpt_features = pd.DataFrame(rpt_features)
 
 print("\nExtracted RPT capacities:")
 print(rpt_features)
@@ -595,49 +429,26 @@ print(rpt_features)
 
 rpt_efc = []
 
-for rpt in sorted(
-    df["rpt"].dropna().unique()
-):
-
-    x = df[
-        df["rpt"] == rpt
-    ].sort_values("time_stamp")
+for rpt in sorted(df["rpt"].dropna().unique()):
+    x = df[df["rpt"] == rpt].sort_values("time_stamp")
 
     first = x.iloc[0]
 
     last = x.iloc[-1]
 
-    total_dischg_start = (
-        first[
-            "total_dischg_thrgh_ah_rounded"
-        ]
+    total_dischg_start = first["total_dischg_thrgh_ah_rounded"]
+
+    total_dischg_end = last["total_dischg_thrgh_ah_rounded"]
+
+    rpt_efc.append(
+        {
+            "rpt": rpt,
+            "total_dischg_start_Ah": total_dischg_start,
+            "total_dischg_end_Ah": total_dischg_end,
+            "efc_start": total_dischg_start / NOMINAL_CAPACITY_AH,
+            "efc_end": total_dischg_end / NOMINAL_CAPACITY_AH,
+        }
     )
-
-    total_dischg_end = (
-        last[
-            "total_dischg_thrgh_ah_rounded"
-        ]
-    )
-
-    rpt_efc.append({
-
-        "rpt": rpt,
-
-        "total_dischg_start_Ah":
-            total_dischg_start,
-
-        "total_dischg_end_Ah":
-            total_dischg_end,
-
-        "efc_start":
-            total_dischg_start /
-            NOMINAL_CAPACITY_AH,
-
-        "efc_end":
-            total_dischg_end /
-            NOMINAL_CAPACITY_AH,
-
-    })
 
 
 rpt_efc = pd.DataFrame(rpt_efc)
@@ -650,21 +461,14 @@ print(rpt_efc)
 # SAVE EFC DIAGNOSTICS
 # ============================================================
 
-rpt_efc.to_csv(
-    OUTPUT_DIR / "rpt_efc_diagnostics.csv",
-    index=False
-)
+rpt_efc.to_csv(OUTPUT_DIR / "rpt_efc_diagnostics.csv", index=False)
 
 
 # ============================================================
 # MERGE FEATURES + EFC
 # ============================================================
 
-rpt_info = rpt_features.merge(
-    rpt_efc,
-    on="rpt",
-    how="left"
-)
+rpt_info = rpt_features.merge(rpt_efc, on="rpt", how="left")
 
 print("\nRPT information:")
 print(rpt_info)
@@ -682,58 +486,38 @@ print(rpt_info)
 # We can change this after inspecting the paper/dataset.
 # ============================================================
 
-rpt_info["efc"] = (
-    rpt_info["efc_start"]
-)
+rpt_info["efc"] = rpt_info["efc_start"]
 
 
 # ============================================================
 # CYCLE-1 / FIRST-RPT FEATURE
 # ============================================================
 
-rpt_info = rpt_info.sort_values(
-    "efc"
-).reset_index(drop=True)
+rpt_info = rpt_info.sort_values("efc").reset_index(drop=True)
 
 first_rpt = rpt_info.iloc[0]
 
 cycle1_rpt = first_rpt["rpt"]
 
-cycle1_capacity = (
-    first_rpt["capacity_Ah"]
-)
+cycle1_capacity = first_rpt["capacity_Ah"]
 
-cycle1_voltage = (
-    rpt_curves[cycle1_rpt]["voltage"]
-)
+cycle1_voltage = rpt_curves[cycle1_rpt]["voltage"]
 
-print(step_summary[
-    step_summary["rpt"] == 0
-].to_string(index=False))
+print(step_summary[step_summary["rpt"] == 0].to_string(index=False))
 
 # ============================================================
 # FIND RPTS AROUND 50 EFC
 # ============================================================
 
-before = rpt_info[
-    rpt_info["efc"] <= TARGET_EFC
-]
+before = rpt_info[rpt_info["efc"] <= TARGET_EFC]
 
-after = rpt_info[
-    rpt_info["efc"] >= TARGET_EFC
-]
+after = rpt_info[rpt_info["efc"] >= TARGET_EFC]
 
 if len(before) == 0:
-
-    raise ValueError(
-        "No RPT before 50 EFC."
-    )
+    raise ValueError("No RPT before 50 EFC.")
 
 if len(after) == 0:
-
-    raise ValueError(
-        "No RPT after 50 EFC."
-    )
+    raise ValueError("No RPT after 50 EFC.")
 
 
 rpt_a = before.iloc[-1]
@@ -751,32 +535,18 @@ efc_b = rpt_b["efc"]
 # ============================================================
 
 if abs(efc_b - efc_a) < 1e-12:
-
     alpha = 0.0
 
 else:
-
-    alpha = (
-        TARGET_EFC - efc_a
-    ) / (
-        efc_b - efc_a
-    )
+    alpha = (TARGET_EFC - efc_a) / (efc_b - efc_a)
 
 
 print("\n50 EFC interpolation:")
-print(
-    f"RPT A = {rpt_a_id}, "
-    f"EFC = {efc_a:.4f}"
-)
+print(f"RPT A = {rpt_a_id}, EFC = {efc_a:.4f}")
 
-print(
-    f"RPT B = {rpt_b_id}, "
-    f"EFC = {efc_b:.4f}"
-)
+print(f"RPT B = {rpt_b_id}, EFC = {efc_b:.4f}")
 
-print(
-    f"alpha = {alpha:.6f}"
-)
+print(f"alpha = {alpha:.6f}")
 
 
 # ============================================================
@@ -786,34 +556,20 @@ print(
 capacity_a = rpt_a["capacity_Ah"]
 capacity_b = rpt_b["capacity_Ah"]
 
-capacity_50 = (
-    capacity_a +
-    alpha *
-    (capacity_b - capacity_a)
-)
+capacity_50 = capacity_a + alpha * (capacity_b - capacity_a)
 
 
 # ============================================================
 # INTERPOLATE VOLTAGE CURVE
 # ============================================================
 
-voltage_a = (
-    rpt_curves[rpt_a_id]["voltage"]
-)
+voltage_a = rpt_curves[rpt_a_id]["voltage"]
 
-voltage_b = (
-    rpt_curves[rpt_b_id]["voltage"]
-)
+voltage_b = rpt_curves[rpt_b_id]["voltage"]
 
-q_grid = (
-    rpt_curves[rpt_a_id]["q_norm"]
-)
+q_grid = rpt_curves[rpt_a_id]["q_norm"]
 
-voltage_50 = (
-    voltage_a +
-    alpha *
-    (voltage_b - voltage_a)
-)
+voltage_50 = voltage_a + alpha * (voltage_b - voltage_a)
 
 
 # ============================================================
@@ -827,123 +583,76 @@ voltage_50 = (
 # 50-EFC voltage
 #
 
-voltage_features = pd.DataFrame({
-
-    "normalized_discharge_capacity":
-        q_grid,
-
-    "voltage_cycle_1_V":
-        cycle1_voltage,
-
-    "voltage_50_EFC_V":
-        voltage_50,
-
-})
-
-
-voltage_features.to_csv(
-    OUTPUT_DIR /
-    "model_voltage_features.csv",
-    index=False
+voltage_features = pd.DataFrame(
+    {
+        "normalized_discharge_capacity": q_grid,
+        "voltage_cycle_1_V": cycle1_voltage,
+        "voltage_50_EFC_V": voltage_50,
+    }
 )
+
+
+voltage_features.to_csv(OUTPUT_DIR / "model_voltage_features.csv", index=False)
 
 
 # ============================================================
 # SAVE NUMPY ARRAY
 # ============================================================
 
-X_voltage = np.vstack([
-
-    cycle1_voltage,
-
-    voltage_50,
-
-])
-
-np.save(
-    OUTPUT_DIR /
-    "X_voltage.npy",
-
-    X_voltage
+X_voltage = np.vstack(
+    [
+        cycle1_voltage,
+        voltage_50,
+    ]
 )
+
+np.save(OUTPUT_DIR / "X_voltage.npy", X_voltage)
 
 
 # ============================================================
 # SAVE METADATA
 # ============================================================
 
-metadata = pd.DataFrame({
-
-    "quantity": [
-
-        "first_rpt",
-        "cycle_1_capacity_Ah",
-
-        "rpt_before_50",
-        "efc_before_50",
-
-        "rpt_after_50",
-        "efc_after_50",
-
-        "interpolation_alpha",
-        "capacity_50_EFC_Ah",
-
-    ],
-
-    "value": [
-
-        cycle1_rpt,
-        cycle1_capacity,
-
-        rpt_a_id,
-        efc_a,
-
-        rpt_b_id,
-        efc_b,
-
-        alpha,
-        capacity_50,
-
-    ]
-
-})
-
-metadata.to_csv(
-    OUTPUT_DIR /
-    "model_metadata.csv",
-    index=False
+metadata = pd.DataFrame(
+    {
+        "quantity": [
+            "first_rpt",
+            "cycle_1_capacity_Ah",
+            "rpt_before_50",
+            "efc_before_50",
+            "rpt_after_50",
+            "efc_after_50",
+            "interpolation_alpha",
+            "capacity_50_EFC_Ah",
+        ],
+        "value": [
+            cycle1_rpt,
+            cycle1_capacity,
+            rpt_a_id,
+            efc_a,
+            rpt_b_id,
+            efc_b,
+            alpha,
+            capacity_50,
+        ],
+    }
 )
+
+metadata.to_csv(OUTPUT_DIR / "model_metadata.csv", index=False)
 
 
 print("\n======================================")
 print("EXTRACTION COMPLETE")
 print("======================================")
 
-print(
-    f"Cycle 1 / first RPT: {cycle1_rpt}"
-)
+print(f"Cycle 1 / first RPT: {cycle1_rpt}")
 
-print(
-    f"Cycle 1 capacity: "
-    f"{cycle1_capacity:.4f} Ah"
-)
+print(f"Cycle 1 capacity: {cycle1_capacity:.4f} Ah")
 
-print(
-    f"50 EFC capacity: "
-    f"{capacity_50:.4f} Ah"
-)
+print(f"50 EFC capacity: {capacity_50:.4f} Ah")
 
-print(
-    f"50 EFC interpolation: "
-    f"{rpt_a_id} → {rpt_b_id}"
-)
+print(f"50 EFC interpolation: {rpt_a_id} → {rpt_b_id}")
 
-print(
-    f"Voltage feature shape: "
-    f"{X_voltage.shape}"
-)
+print(f"Voltage feature shape: {X_voltage.shape}")
 
-print(
-    f"\nOutput directory: "
-    f"{OUTPUT_DIR.resolve()}"
-)
+print(f"\nOutput directory: {OUTPUT_DIR.resolve()}")

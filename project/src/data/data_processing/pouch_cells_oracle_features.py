@@ -105,25 +105,33 @@ def build_test_set_oracle_features(number_relationship_path: str) -> pd.DataFram
             cell_id_str in DRIVING_CYCLE_CELL_IDS
             or cell_id_str.zfill(3) in DRIVING_CYCLE_CELL_IDS
         )
-        records.append({
-            "cell_index": row["cell_index"],
-            "group_index": group,
-            "temp_C": temp_C,
-            "charge_c_rate": charge_c,
-            "discharge_c_rate": discharge_c,
-            "is_driving_cycle_cell": is_driving,
-        })
+        records.append(
+            {
+                "cell_index": row["cell_index"],
+                "group_index": group,
+                "temp_C": temp_C,
+                "charge_c_rate": charge_c,
+                "discharge_c_rate": discharge_c,
+                "is_driving_cycle_cell": is_driving,
+            }
+        )
 
     result = pd.DataFrame(records)
     n_driving = result["is_driving_cycle_cell"].sum()
-    print(f"Built oracle features for {len(result)} cells "
-          f"({n_driving} flagged as driving-cycle protocol cells)")
+    print(
+        f"Built oracle features for {len(result)} cells "
+        f"({n_driving} flagged as driving-cycle protocol cells)"
+    )
     return result
 
 
 if __name__ == "__main__":
     import sys
+
     path = sys.argv[1] if len(sys.argv) > 1 else "number_relationship.xlsx"
     out = build_test_set_oracle_features(path)
-    out.to_csv("/work3/claho/battery_datasets/processed/pouch_cells/pouch_cells_oracle_features.csv", index=False)
+    out.to_csv(
+        "/work3/claho/battery_datasets/processed/pouch_cells/pouch_cells_oracle_features.csv",
+        index=False,
+    )
     print(out.to_string())
