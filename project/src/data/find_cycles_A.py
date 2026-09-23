@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
+import os
+import glob
 
 Q_NOM = 3.7
 
@@ -61,173 +63,136 @@ def calculate_efc(df, q_nom=Q_NOM, reset_threshold=0.1):
 # ============================================================
 # 2. Find individual full charge events
 # ============================================================
-
 def find_charge_events(
     df,
-    current_threshold=3,
-    current_deviation_fraction=0.05,
+    start_threshold=0.1,
+    reference_duration_s=60,
+    current_deviation_fraction=0.10,
     min_deviation_duration_s=20,
     min_duration_h=0.1,
-    max_duration_h=3,
+    max_duration_h=3.0,
 ):
-
     current = df["Current_A"].to_numpy()
     time = df["Total_Time_Seconds"].to_numpy()
 
-    # --------------------------------------------------------
-    # Identify regions where the battery is charging.
-    #
-    # Positive current = charging
-    # --------------------------------------------------------
-
-    is_charge = current > current_threshold
-
-    starts = np.where(
-        is_charge &
-        ~np.r_[False, is_charge[:-1]]
-    )[0]
-
     events = []
 
-    for start in starts:
+    i = 0
+    n = len(df)
 
-        # ----------------------------------------------------
-        # Find the initial continuous positive-current region
-        # ----------------------------------------------------
+    while i < n:
 
-        i = start
-
-        while (
-            i < len(df)
-            and current[i] > current_threshold
-        ):
+        # ------------------------------------------------------
+        # 1. Find potential start of positive charging current
+        # ------------------------------------------------------
+        if current[i] <= start_threshold:
             i += 1
-
-        preliminary_end = i - 1
-
-        if preliminary_end <= start:
             continue
 
-        # ----------------------------------------------------
-        # Estimate characteristic charge current
-        #
-        # Use the middle 80% to avoid the current transitions
-        # at the beginning and end affecting the reference.
-        # ----------------------------------------------------
+        start = i
 
-        segment = current[
-            start:preliminary_end + 1
-        ]
+        # ------------------------------------------------------
+        # 2. Collect a short initial charging-current window
+        # ------------------------------------------------------
+        reference_indices = []
 
-        n = len(segment)
+        j = start
 
-        lo = int(0.10 * n)
-        hi = int(0.90 * n)
+        while j < n:
+            if current[j] > start_threshold:
+                reference_indices.append(j)
 
-        if hi <= lo:
+            if time[j] - time[start] >= reference_duration_s:
+                break
+
+            j += 1
+
+        if len(reference_indices) < 3:
+            i += 1
             continue
 
         characteristic_current = np.median(
-            segment[lo:hi]
+            current[reference_indices]
         )
 
-        # ----------------------------------------------------
-        # Calculate relative deviation from the characteristic
-        # charge current.
-        # ----------------------------------------------------
+        # Reject tiny/noisy positive-current regions
+        if characteristic_current <= start_threshold:
+            i += 1
+            continue
 
-        deviation = (
-            np.abs(
-                current[start:preliminary_end + 1]
-                - characteristic_current
-            )
-            / abs(characteristic_current)
-        )
-
-        # ----------------------------------------------------
-        # Find a sustained deviation.
+        # ------------------------------------------------------
+        # 3. Follow the ORIGINAL current signal forward.
         #
-        # A single noisy sample is not enough to terminate
-        # the charge event.
-        # ----------------------------------------------------
-
-        end = preliminary_end
-
+        # The start_threshold is no longer involved.
+        # ------------------------------------------------------
         deviation_start = None
+        end = None
 
-        for j, dev in enumerate(deviation):
+        j = start
 
-            if dev > current_deviation_fraction:
+        while j < n:
+
+            relative_deviation = (
+                abs(
+                    current[j]
+                    - characteristic_current
+                )
+                / abs(characteristic_current)
+            )
+
+            if relative_deviation > current_deviation_fraction:
 
                 if deviation_start is None:
                     deviation_start = j
 
-                t0 = time[
-                    start + deviation_start
-                ]
-
-                t1 = time[
-                    start + j
-                ]
-
                 if (
-                    t1 - t0
+                    time[j]
+                    - time[deviation_start]
                     >= min_deviation_duration_s
                 ):
-
-                    # Charge ends immediately before the
-                    # sustained current deviation.
-                    end = (
-                        start
-                        + deviation_start
-                        - 1
-                    )
-
+                    end = deviation_start - 1
                     break
 
             else:
-
-                # Current returned to the normal
-                # charge-current band.
+                # It returned to the normal charging-current band
                 deviation_start = None
 
-        # ----------------------------------------------------
-        # Calculate charge duration
-        # ----------------------------------------------------
+            j += 1
 
+        if end is None:
+            break
+
+        # ------------------------------------------------------
+        # 4. Duration filtering
+        # ------------------------------------------------------
         if end <= start:
+            i += 1
             continue
 
         duration_h = (
             time[end] - time[start]
-        ) / 3600
+        ) / 3600.0
 
-        # ----------------------------------------------------
-        # Keep approximately full charge events
-        # ----------------------------------------------------
-
-        if not (
+        if (
             min_duration_h
             <= duration_h
             <= max_duration_h
         ):
-            continue
+            events.append({
+                "start_idx": start,
+                "end_idx": end,
+                "duration_h": duration_h,
+                "current_A": characteristic_current,
 
-        events.append({
-            "start_idx": start,
-            "end_idx": end,
+                # EFC is essentially constant during charge,
+                # so one value is enough.
+                "efc": df.loc[start, "EFC"],
+            })
 
-            "duration_h": duration_h,
-
-            "current_A": characteristic_current,
-
-            # EFC is discharge-based, so it is a single
-            # reference value for the charge event.
-            "efc": df.loc[
-                start,
-                "EFC"
-            ],
-        })
+        # ------------------------------------------------------
+        # 5. Continue searching AFTER this event
+        # ------------------------------------------------------
+        i = max(end + 1, i + 1)
 
     return events
 
@@ -268,6 +233,226 @@ def distance_to_index(event, target_idx):
 
     return 0
 
+def process_battery_file(file_path):
+    battery_name = os.path.splitext(os.path.basename(file_path))[0]
+
+    print("\n" + "=" * 80)
+    print(f"Processing battery: {battery_name}")
+    print("=" * 80)
+
+    # ------------------------------------------------------------------
+    # Load data
+    # ------------------------------------------------------------------
+    df = pd.read_csv(file_path)
+
+    # ------------------------------------------------------------------
+    # Calculate global EFC
+    # ------------------------------------------------------------------
+    df = calculate_efc(
+        df,
+        q_nom=Q_NOM,
+        reset_threshold=0.1
+    )
+
+    # ------------------------------------------------------------------
+    # Identify charge events
+    # ------------------------------------------------------------------
+    events = find_charge_events(
+        df,
+        start_threshold=1,
+        current_deviation_fraction=0.05,
+        min_deviation_duration_s=20,
+        min_duration_h=0.1,
+        max_duration_h=4,
+    )
+
+    if len(events) < 2:
+        print(
+            f"WARNING: Only {len(events)} charge event(s) "
+            f"found for {battery_name}"
+        )
+        return
+
+    print(f"Found {len(events)} charge events.")
+
+    # ------------------------------------------------------------------
+    # Find the charge event closest to EFC = 50
+    # ------------------------------------------------------------------
+    efc_target = 50.0
+
+    first_event = events[0]
+
+    efc50_event = min(
+        events,
+        key=lambda event: abs(event["efc"] - efc_target)
+    )
+
+    # Avoid selecting the same event twice
+    if efc50_event["start_idx"] == first_event["start_idx"]:
+        print(
+            "WARNING: The first charge event is also the event "
+            "closest to EFC 50."
+        )
+        selected_events = [first_event]
+    else:
+        selected_events = [first_event, efc50_event]
+
+    # ------------------------------------------------------------------
+    # Extract voltage curves and reset time to zero
+    # ------------------------------------------------------------------
+    curves = []
+
+    for i, event in enumerate(selected_events, start=1):
+
+        if i == 1:
+            event_label = "First charge"
+        else:
+            event_label = "EFC 50 charge"
+
+        start_idx = event["start_idx"]
+        end_idx = event["end_idx"]
+
+        event_df = df.loc[start_idx:end_idx].copy()
+
+        event_time = (
+            event_df["Total_Time_Seconds"]
+            - event_df["Total_Time_Seconds"].iloc[0]
+        )
+
+        voltage = event_df["Voltage_V"].to_numpy()
+
+        curves.append(
+            {
+                "time": event_time.to_numpy(),
+                "voltage": voltage,
+                "efc": event["efc"],
+            }
+        )
+
+        print(
+            f"  {event_label}: "
+            f"index {start_idx} -> {end_idx}, "
+            f"EFC = {event['efc']:.3f}, "
+            f"duration = {event_time.iloc[-1] / 3600:.3f} h"
+        )
+
+    # ------------------------------------------------------------------
+    # Create DataFrame containing the two voltage curves
+    #
+    # Each curve has its own time column because the number of samples
+    # may differ between the two events.
+    # ------------------------------------------------------------------
+    max_length = max(
+        len(curve["time"])
+        for curve in curves
+    )
+
+    processed_df = pd.DataFrame(
+        {
+            "Time_1_s": pd.Series(
+                curves[0]["time"]
+            ),
+            "Voltage_1_V": pd.Series(
+                curves[0]["voltage"]
+            ),
+            "Time_2_s": pd.Series(
+                curves[1]["time"]
+            ),
+            "Voltage_2_V": pd.Series(
+                curves[1]["voltage"]
+            ),
+        }
+    )
+
+    # ------------------------------------------------------------------
+    # Save processed voltage curves
+    # ------------------------------------------------------------------
+    output_csv = os.path.join(
+        DATA_DIR,
+        f"Processed_{battery_name}.csv"
+    )
+
+    # processed_df.to_csv(
+    #     output_csv,
+    #     index=False
+    # )
+
+    print(f"Saved voltage curves to:")
+    print(f"  {output_csv}")
+
+    # ------------------------------------------------------------------
+    # Plot the two charge curves
+    # ------------------------------------------------------------------
+  # ------------------------------------------------------------------
+# Plot first charge and EFC50 charge as two subplots
+# ------------------------------------------------------------------
+
+    fig, axes = plt.subplots(
+        1, 2,
+        figsize=(14, 6),
+        sharey=True
+    )
+
+    # First charge event (EFC ~ 0)
+    axes[0].plot(
+        curves[0]["time"] / 60.0,
+        curves[0]["voltage"]
+    )
+
+    axes[0].set_title(
+        f"First charge (EFC = {curves[0]['efc']:.2f})"
+    )
+    axes[0].set_xlabel("Time [min]")
+    axes[0].set_ylabel("Voltage [V]")
+    axes[0].grid(True)
+
+
+    # Charge event closest to EFC 50
+    axes[1].plot(
+        curves[1]["time"] / 60.0,
+        curves[1]["voltage"]
+    )
+
+    axes[1].set_title(
+        f"EFC 50 charge (EFC = {curves[1]['efc']:.2f})"
+    )
+    axes[1].set_xlabel("Time [min]")
+    axes[1].grid(True)
+
+
+    # Overall figure title
+    fig.suptitle(
+        f"{battery_name} - Voltage Curves",
+        fontsize=14
+    )
+
+    plt.tight_layout()
+
+
+    # ------------------------------------------------------------------
+    # Save figure
+    # ------------------------------------------------------------------
+
+    plot_dir = Path("project/reports/figures/LG_MJ1/")
+    plot_dir.mkdir(parents=True, exist_ok=True)
+
+    output_plot = plot_dir / f"{battery_name}_voltage_curves.png"
+
+    plt.savefig(
+        output_plot,
+        dpi=300,
+        bbox_inches="tight"
+    )
+
+    plt.close(fig)
+
+    print("Saved plot to:")
+    print(f"  {output_plot}")
+
+
+# ==========================================================================
+# MAIN
+
 
 # ============================================================
 # MAIN
@@ -275,238 +460,33 @@ def distance_to_index(event, target_idx):
 
 if __name__ == "__main__":
 
-    csv_file = (
+    DATA_DIR = (
         "/work3/claho/battery_datasets/lg_mj1/"
-        "Cycl_T25_SOC10-90_Dch1.5C_Ch1.0C_"
-        "Vito_Cell85_AllData.csv"
     )
 
-    df = pd.read_csv(csv_file)
-
-
-    # ------------------------------------------------------------
-    # Calculate global discharge-based EFC
-    # ------------------------------------------------------------
-
-    df = calculate_efc(
-        df,
-        q_nom=Q_NOM,
+    csv_files = sorted(
+    glob.glob(
+        os.path.join(DATA_DIR, "*.csv")
+    )
     )
 
+    # Do not accidentally process files generated by this script
+    csv_files = [
+        f for f in csv_files
+        if not os.path.basename(f).startswith("Processed_")
+    ]
 
-    # ------------------------------------------------------------
-    # Find the actual dataframe index closest to EFC = 50
-    # ------------------------------------------------------------
+    print(f"Found {len(csv_files)} battery files.")
 
-    efc50_idx = find_efc_index(
-        df,
-        target_efc=50.0,
-    )
+    for file_path in csv_files:
 
-    print(
-        f"EFC 50 index: {efc50_idx}"
-    )
+        try:
+            process_battery_file(file_path)
 
-    print(
-        f"EFC at index: "
-        f"{df.loc[efc50_idx, 'EFC']:.6f}"
-    )
+        except Exception as e:
 
-
-    # ------------------------------------------------------------
-    # Find full charge events
-    # ------------------------------------------------------------
-
-    events = find_charge_events(
-        df,
-
-        # Positive current above this value
-        current_threshold=3,
-
-        # End when current deviates by >5%
-        current_deviation_fraction=0.05,
-
-        # Deviation must persist for 20 seconds
-        min_deviation_duration_s=20,
-
-        # Charge duration limits
-        min_duration_h=0.1,
-        max_duration_h=3,
-    )
-
-    print(
-        f"Number of full charge events: "
-        f"{len(events)}"
-    )
-
-
-    # ------------------------------------------------------------
-    # First full charge
-    # ------------------------------------------------------------
-
-    first_charge = events[0]
-
-
-    # ------------------------------------------------------------
-    # Charge closest to EFC 50
-    # ------------------------------------------------------------
-
-    efc50_charge = min(
-        events,
-        key=lambda event:
-            distance_to_index(
-                event,
-                efc50_idx,
+            print(
+                f"\nERROR processing "
+                f"{os.path.basename(file_path)}:"
             )
-    )
-
-
-    # ------------------------------------------------------------
-    # Print results
-    # ------------------------------------------------------------
-
-    print("\nFirst full charge")
-
-    print(
-        f"  Index: "
-        f"{first_charge['start_idx']} "
-        f"-> "
-        f"{first_charge['end_idx']}"
-    )
-
-    print(
-        f"  EFC: "
-        f"{first_charge['efc']:.4f}"
-    )
-
-    print(
-        f"  Duration: "
-        f"{first_charge['duration_h']:.3f} h"
-    )
-
-    print(
-        f"  Characteristic current: "
-        f"{first_charge['current_A']:.3f} A"
-    )
-
-
-    print("\nCharge closest to EFC 50")
-
-    print(
-        f"  Index: "
-        f"{efc50_charge['start_idx']} "
-        f"-> "
-        f"{efc50_charge['end_idx']}"
-    )
-
-    print(
-        f"  EFC: "
-        f"{efc50_charge['efc']:.4f}"
-    )
-
-    print(
-        f"  Duration: "
-        f"{efc50_charge['duration_h']:.3f} h"
-    )
-
-    print(
-        f"  Characteristic current: "
-        f"{efc50_charge['current_A']:.3f} A"
-    )
-
-
-    # ============================================================
-    # Extract voltage curves
-    # ============================================================
-
-    first_data = df.loc[
-        first_charge["start_idx"]:
-        first_charge["end_idx"]
-    ]
-
-    efc50_data = df.loc[
-        efc50_charge["start_idx"]:
-        efc50_charge["end_idx"]
-    ]
-
-
-    first_time = (
-        first_data["Total_Time_Seconds"]
-        - first_data["Total_Time_Seconds"].iloc[0]
-    )
-
-    efc50_time = (
-        efc50_data["Total_Time_Seconds"]
-        - efc50_data["Total_Time_Seconds"].iloc[0]
-    )
-
-
-    first_voltage = first_data["Voltage_V"]
-
-    efc50_voltage = efc50_data["Voltage_V"]
-
-
-    # ============================================================
-    # Plot voltage curves
-    # ============================================================
-
-    fig, axes = plt.subplots(
-        1,
-        2,
-        figsize=(12, 5),
-        sharey=True,
-    )
-
-    axes[0].plot(
-        first_time / 3600,
-        first_voltage,
-    )
-
-    axes[0].set_title(
-        "First full charge"
-    )
-
-    axes[0].set_xlabel(
-        "Time (h)"
-    )
-
-    axes[0].set_ylabel(
-        "Voltage (V)"
-    )
-
-    axes[0].grid(True)
-
-
-    axes[1].plot(
-        efc50_time / 3600,
-        efc50_voltage,
-    )
-
-    axes[1].set_title(
-        "Charge closest to EFC 50"
-    )
-
-    axes[1].set_xlabel(
-        "Time (h)"
-    )
-
-    axes[1].grid(True)
-
-
-    plt.tight_layout()
-
-    output_dir = Path(
-        "project/reports/figures/LG_MJ1"
-    )
-
-    output_dir.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    plt.savefig(
-        output_dir / "correct_voltage_charge_curves.png",
-        dpi=300,
-    )
-
-    plt.close()
+            print(e)
