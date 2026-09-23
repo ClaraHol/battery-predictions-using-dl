@@ -233,7 +233,7 @@ def distance_to_index(event, target_idx):
 
     return 0
 
-def process_battery_file(file_path):
+def process_battery_file(file_path, save_dir):
     battery_name = os.path.splitext(os.path.basename(file_path))[0]
 
     print("\n" + "=" * 80)
@@ -368,14 +368,14 @@ def process_battery_file(file_path):
     # Save processed voltage curves
     # ------------------------------------------------------------------
     output_csv = os.path.join(
-        DATA_DIR,
+        save_dir,
         f"Processed_{battery_name}.csv"
     )
 
-    # processed_df.to_csv(
-    #     output_csv,
-    #     index=False
-    # )
+    processed_df.to_csv(
+        output_csv,
+        index=False
+    )
 
     print(f"Saved voltage curves to:")
     print(f"  {output_csv}")
@@ -459,11 +459,12 @@ def process_battery_file(file_path):
 # ============================================================
 
 if __name__ == "__main__":
-
+    ### THIS SHOULD BE CHANGED TO MATCH YOUR DESIRED DIRECTORY.
+    save_dir = "/work3/claho/battery_datasets/"
     DATA_DIR = (
         "/work3/claho/battery_datasets/lg_mj1/"
     )
-
+    save_dir
     csv_files = sorted(
     glob.glob(
         os.path.join(DATA_DIR, "*.csv")
