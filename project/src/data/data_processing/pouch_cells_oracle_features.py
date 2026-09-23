@@ -125,5 +125,5 @@ if __name__ == "__main__":
     import sys
     path = sys.argv[1] if len(sys.argv) > 1 else "number_relationship.xlsx"
     out = build_test_set_oracle_features(path)
-    out.to_csv("/work3/claho/battery_datasets/processed/pouch_cells/farasis_oracle_features.csv", index=False)
+    out.to_csv("/work3/claho/battery_datasets/processed/pouch_cells/pouch_cells_oracle_features.csv", index=False)
     print(out.to_string())

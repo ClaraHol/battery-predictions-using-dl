@@ -259,9 +259,9 @@ def parse_snl_cycle_summary(csv_path: str) -> dict:
         out[cell_id] = group[["cycle_index", "ah_d"]].sort_values("cycle_index").reset_index(drop=True)
     return out
 #-------------------------------------------------------------------------------------------------------------
-# Farasis (DL paper own data)
+# Pouch Cells (DL paper own data)
 #-------------------------------------------------------------------------------------------------------------
-def parse_farasis_rpt_metadata(xlsx_path: str) -> pd.DataFrame:
+def parse_pouch_cells_rpt_metadata(xlsx_path: str) -> pd.DataFrame:
     """
     Parses a '<cell>_dchg_cap_rpt.xlsx' file. Confirmed to come in at least
     two different schemas across cells:
@@ -311,7 +311,7 @@ def parse_farasis_rpt_metadata(xlsx_path: str) -> pd.DataFrame:
  
 
  
-def parse_farasis_rpt_curve(parquet_path: str, rpt_number: int, batch_size: int = 1_000_000) -> pd.DataFrame:
+def parse_pouch_cells_rpt_curve(parquet_path: str, rpt_number: int, batch_size: int = 1_000_000) -> pd.DataFrame:
     """
     Streams through the (typically huge, ~100-200MB / tens of millions of
     rows) raw parquet and pulls out every row belonging to one RPT number.
@@ -327,7 +327,7 @@ def parse_farasis_rpt_curve(parquet_path: str, rpt_number: int, batch_size: int 
     be genuine charge/discharge and almost certainly the DCR pulse test).
 
     Output columns match this pipeline's standard schema as closely as
-    possible, plus soc/step_no which are Farasis-specific extras:
+    possible, plus soc/step_no which are pouch_cells-specific extras:
     time_s, voltage_V, current_A, temp_C, soc, step_no, cycle_number
     (= rpt_number, for compatibility with code elsewhere expecting a
     'cycle_number' column).
@@ -483,7 +483,7 @@ def find_bracketing_rpts(efc_per_rpt: pd.Series, target_efc: float):
 
 
 
-def build_farasis_cell_record(cell_id: str, rpt_metadata: pd.DataFrame, parquet_path: str = None,
+def build_pouch_cells_cell_record(cell_id: str, rpt_metadata: pd.DataFrame, parquet_path: str = None,
                                nominal_capacity_Ah: float = None, target_efc: int = 50):
     """
     cycle_life_rpt_units: RPT-index units ("reached 90% of initial capacity

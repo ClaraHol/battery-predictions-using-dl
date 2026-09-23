@@ -9,7 +9,7 @@ established for cell 019:
     <cell_id>_single_parquet_with_soc_and_corrections.parquet
     <cell_id>_dchg_cap_rpt.xlsx
 
-*** UPDATED cycle-50 handling ***
+***  Cycle-50 handling ***
 Per the paper: "the feature at the 50th equivalent full cycle is generally
 obtained by interpolating between the features corresponding to the two
 nearest reference performance tests before and after it." So this script
@@ -24,7 +24,7 @@ This script does NOT do that combination itself, since it depends on which
 features you actually want - it hands you both raw curves and the weight.
 
 Usage:
-    python build_farasis_test_set.py /path/to/farasis/raw/files/
+    python build_pouch_cells_test_set.py /path/to/pouch_cells/raw/files/
 """
 
 import sys
@@ -32,7 +32,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from parsers import parse_farasis_rpt_metadata, parse_farasis_rpt_curve, build_farasis_cell_record, extract_primary_charging_curve
+from parsers import parse_pouch_cells_rpt_metadata, parse_pouch_cells_rpt_curve, build_pouch_cells_cell_record, extract_primary_charging_curve
 
 DATA_ROOT = Path(f"/work3/claho/battery_datasets")
 OUTPUT_DIR = Path(f"/work3/claho/battery_datasets/processed/pouch_cells")
@@ -72,8 +72,8 @@ def main(raw_dir: str):
 
     for cell_id, files in complete.items():
         print(f"[{cell_id}]")
-        rpt_meta = parse_farasis_rpt_metadata(files["metadata"])
-        record = build_farasis_cell_record(
+        rpt_meta = parse_pouch_cells_rpt_metadata(files["metadata"])
+        record = build_pouch_cells_cell_record(
             cell_id, rpt_meta, parquet_path=str(files["parquet"]), target_efc=TARGET_EFC
         )
         metadata_rows.append(record)
@@ -84,21 +84,21 @@ def main(raw_dir: str):
               f"RPT{record['efc50_rpt_after']} (weight={record['efc50_interp_weight']:.3f})")
 
        
-        curve0 = parse_farasis_rpt_curve(files["parquet"], rpt_number=0)
+        curve0 = parse_pouch_cells_rpt_curve(files["parquet"], rpt_number=0)
         efc0 = extract_primary_charging_curve(curve0) # Extract the charging curve
         efc0["cell_id"] = cell_id
         rpt0_frames.append(efc0)
 
         rpt_before, rpt_after = record["efc50_rpt_before"], record["efc50_rpt_after"]
 
-        curve_before = parse_farasis_rpt_curve(files["parquet"], rpt_number=rpt_before)
+        curve_before = parse_pouch_cells_rpt_curve(files["parquet"], rpt_number=rpt_before)
         efc50_before = extract_primary_charging_curve(curve_before) # Extract the charging curve
         efc50_before["cell_id"] = cell_id
         efc50_before_frames.append(efc50_before)
         print(f"  Efc 50 before step number: {efc50_before["step_no"].iloc[0]}")
 
         if rpt_after != rpt_before:
-            curve_after = parse_farasis_rpt_curve(files["parquet"], rpt_number=rpt_after)
+            curve_after = parse_pouch_cells_rpt_curve(files["parquet"], rpt_number=rpt_after)
             efc50_after = extract_primary_charging_curve(curve_after) # Extract the charging curve
             print(f"  Efc 50 after step number: {efc50_after["step_no"].iloc[0]}")
             efc50_after["cell_id"] = cell_id
@@ -108,21 +108,21 @@ def main(raw_dir: str):
               f"EFC{TARGET_EFC}-after curve: {len(efc50_after)} rows")
 
     metadata_df = pd.DataFrame(metadata_rows)
-    metadata_df.to_csv(OUTPUT_DIR / "farasis_cell_metadata.csv", index=False)
+    metadata_df.to_csv(OUTPUT_DIR / "pouch_cells_cell_metadata.csv", index=False)
     print(f"\nMetadata (includes efc50 bracketing RPTs + weight per cell) -> "
-          f"{OUTPUT_DIR / 'farasis_cell_metadata.csv'}")
+          f"{OUTPUT_DIR / 'pouch_cells_cell_metadata.csv'}")
 
     if rpt0_frames:
-        pd.concat(rpt0_frames, ignore_index=True).to_parquet(OUTPUT_DIR / "farasis_rpt0_curves.parquet", index=False)
-        print(f"RPT0 curves -> {OUTPUT_DIR / 'farasis_rpt0_curves.parquet'}")
+        pd.concat(rpt0_frames, ignore_index=True).to_parquet(OUTPUT_DIR / "pouch_cells_rpt0_curves.parquet", index=False)
+        print(f"RPT0 curves -> {OUTPUT_DIR / 'pouch_cells_rpt0_curves.parquet'}")
     if efc50_before_frames:
         pd.concat(efc50_before_frames, ignore_index=True).to_parquet(
-            OUTPUT_DIR / "farasis_efc50_before_curves.parquet", index=False)
-        print(f"EFC{TARGET_EFC}-before curves -> {OUTPUT_DIR / 'farasis_efc50_before_curves.parquet'}")
+            OUTPUT_DIR / "pouch_cells_efc50_before_curves.parquet", index=False)
+        print(f"EFC{TARGET_EFC}-before curves -> {OUTPUT_DIR / 'pouch_cells_efc50_before_curves.parquet'}")
     if efc50_after_frames:
         pd.concat(efc50_after_frames, ignore_index=True).to_parquet(
-            OUTPUT_DIR / "farasis_efc50_after_curves.parquet", index=False)
-        print(f"EFC{TARGET_EFC}-after curves -> {OUTPUT_DIR / 'farasis_efc50_after_curves.parquet'}")
+            OUTPUT_DIR / "pouch_cells_efc50_after_curves.parquet", index=False)
+        print(f"EFC{TARGET_EFC}-after curves -> {OUTPUT_DIR / 'pouch_cells_efc50_after_curves.parquet'}")
 
 
 

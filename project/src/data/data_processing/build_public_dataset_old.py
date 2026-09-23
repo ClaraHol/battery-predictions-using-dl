@@ -8,10 +8,8 @@ Outputs (written to OUTPUT_DIR):
     cell_metadata_all.csv       every cell, before cleaning
     cell_metadata_cleaned.csv   after the three-step filter - this is the
                                  dataset to actually train on
-    cycle_early_curves.parquet  raw voltage/current/capacity curve at cycle
-                                 EFC_EARLY, for every surviving cell (variable
-                                 length per cell - not padded/resampled)
-    cycle_late_curves.parquet   same, at cycle EFC_LATE
+    efc0_curves.parquet         raw efc0 cycle data for every surviving cell
+    efc50_curves.parquet        raw efc50 cycle data for every surviving cell
 
 *** BEFORE RUNNING, CHECK THE GLOB PATTERNS BELOW ***
 I don't know your exact extracted folder/file layout for each dataset, so
@@ -28,26 +26,20 @@ import pandas as pd
 
 from project.src.data.data_processing.parsers import (
     parse_cmu_vtc6, parse_vtc5a_mat, parse_lgmj1,
-    parse_samsung25r, parse_samsung25r_filename, parse_snl_xlsx,
+    parse_samsung25r, parse_samsung25r_filename,
 )
-from project.src.data.data_processing.process_cell import process_cell
+from project.src.data.data_processing.process_public_cells import process_cell
 from project.src.data.data_processing.config_and_cleaning import apply_three_step_cleaning
 
 DATA_ROOT = Path(f"/work3/claho/battery_datasets")
 OUTPUT_DIR = Path(f"/work3/claho/battery_datasets/processed")
-
-# Exact cycle_number values to pull voltage curves from. NOT necessarily
-# the "first" cycle in the data - some sources are 0-indexed. Check
-# cell_metadata_all.csv / a quick df["cycle_number"].unique() on one parsed
-# cell if you're unsure which convention a given source uses.
-EFC_EARLY = 1
-EFC_LATE = 50
+EFC_TARGET = 50
 
 
 def safe_process(df, cell_id, source_dataset, errors):
     """Wraps process_cell so one bad file doesn't kill the whole run."""
     try:
-        return process_cell(df, cell_id, source_dataset, efc_early=EFC_EARLY, efc_late=EFC_LATE)
+        return process_cell(df, cell_id, source_dataset, efc_target=EFC_TARGET)
     except Exception as e:
         errors.append((cell_id, source_dataset, str(e), traceback.format_exc()))
         return None, None, None
@@ -56,8 +48,8 @@ def safe_process(df, cell_id, source_dataset, errors):
 def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     metadata_rows = []
-    efc_early_frames = []
-    efc_late_frames = []
+    efc0_frames = []
+    efc50_frames = []
     errors = []
 
     # --- Sony-VTC6 (CMU) ---
@@ -73,13 +65,12 @@ def main():
         except Exception as e:
             errors.append((cell_id, "cmu", str(e), traceback.format_exc()))
             continue
-        meta, efc_early, efc_late = safe_process(df, cell_id, "cmu", errors)
+        meta, efc0, efc50 = safe_process(df, cell_id, "cmu", errors)
         if meta:
             metadata_rows.append(meta)
-            if efc_early is not None:
-                efc_early_frames.append(efc_early)
-            if efc_late is not None:
-                efc_late_frames.append(efc_late)
+            efc0_frames.append(efc0)
+            if efc50 is not None:
+                efc50_frames.append(efc50)
 
     # --- Sony-VTC5A (TUM) - cyclic/dynamic only, calendar aging excluded ---
     tum_dir = DATA_ROOT / "sony_vtc5a_raw"
@@ -94,22 +85,19 @@ def main():
         except Exception as e:
             errors.append((cell_id, "tum", str(e), traceback.format_exc()))
             continue
-        meta, efc_early, efc_late = safe_process(df, cell_id, "tum", errors)
+        meta, efc0, efc50 = safe_process(df, cell_id, "tum", errors)
         if meta:
             metadata_rows.append(meta)
-            if efc_early is not None:
-                efc_early_frames.append(efc_early)
-            if efc_late is not None:
-                efc_late_frames.append(efc_late)
+            efc0_frames.append(efc0)
+            if efc50 is not None:
+                efc50_frames.append(efc50)
 
     # --- LG-MJ1 (4TU) - NEEDS temperature per file, not yet wired up ---
     elt_dir = DATA_ROOT / "lg_mj1"
-    elt_files = list(elt_dir.glob("**/*.csv"))
+    elt_files = list(elt_dir.glob("*.csv"))
     print(f"[elt] found {len(elt_files)} files under {elt_dir}")
-    if elt_files:
-        print("  [SKIPPED] parse_lgmj1() needs temp_C_nameplate per file, decoded "
-              "from filename/folder (25C vs 45C) - fill in FILENAME_TO_TEMP below "
-              "once you can see real LG-MJ1 filenames, then remove this skip.")
+    for f in elt_files:
+        cell_id = f"elt_{f.stem}"
         try:
             df = parse_lgmj1(f)
         except Exception as e:
@@ -117,21 +105,9 @@ def main():
         meta, efc0, efc50 = safe_process(df, cell_id, "elt", errors)
         if meta:
             metadata_rows.append(meta)
-            if efc0 is not None:
-                efc_early_frames.append(efc0)
+            efc0_frames.append(efc0)
             if efc50 is not None:
-                efc_late_frames.append(efc50)
-    # Example of what this loop should look like once filenames are known:
-    # FILENAME_TO_TEMP = {"...25C...": 25.0, "...45C...": 45.0}
-    # for f in elt_files:
-    #     cell_id = f"elt_{f.stem}"
-    #     temp = next((t for pat, t in FILENAME_TO_TEMP.items() if pat in f.name), None)
-    #     if temp is None:
-    #         errors.append((cell_id, "elt", "no temperature match for filename", ""))
-    #         continue
-    #     df = parse_lgmj1(f, temp_C_nameplate=temp)
-    #     meta, efc_early, efc_late = safe_process(df, cell_id, "elt", errors)
-    #     ...
+                efc50_frames.append(efc50)
 
     # --- Samsung-25R (Zhu et al.) ---
     tongji_dir = DATA_ROOT / "samsung_25r"
@@ -146,15 +122,15 @@ def main():
         except Exception as e:
             errors.append((cell_id, "tongji", str(e), traceback.format_exc()))
             continue
-        meta, efc_early, efc_late = safe_process(df, cell_id, "tongji", errors)
+        meta, efc0, efc50 = safe_process(df, cell_id, "tongji", errors)
         if meta:
             metadata_rows.append(meta)
-            if efc_early is not None:
-                efc_early_frames.append(efc_early)
-            if efc_late is not None:
-                efc_late_frames.append(efc_late)
+            efc0_frames.append(efc0)
+            if efc50 is not None:
+                efc50_frames.append(efc50)
 
     # --- Sandia SNL (A123-M1A + LG-HG2) - UNVERIFIED parser, see parsers.py ---
+    """
     snl_dir = DATA_ROOT / "sandia_snl"
     snl_files = list(snl_dir.glob("**/*.csv"))
     print(f"[snl] found {len(snl_files)} files under {snl_dir}")
@@ -164,23 +140,20 @@ def main():
     for f in snl_files:
         # A123 cells are LFP chemistry (snl_a), LG-HG2 cells are NMC (snl_b) -
         # adjust this split once you know the real filename convention.
-        if "lfp" in f.name.lower():
-            source = "snl_a"
-        elif  "nmc" in f.name.lower():
-            source = "snl_b"
+        source = "snl_a" if "lfp" in f.name.lower() else "snl_b"
         cell_id = f"{source}_{f.stem}"
         try:
             df = parse_snl_xlsx(f)
         except Exception as e:
             errors.append((cell_id, source, str(e), traceback.format_exc()))
             continue
-        meta, efc_early, efc_late = safe_process(df, cell_id, source, errors)
+        meta, efc0, efc50 = safe_process(df, cell_id, source, errors)
         if meta:
             metadata_rows.append(meta)
-            if efc_early is not None:
-                efc_early_frames.append(efc_early)
-            if efc_late is not None:
-                efc_late_frames.append(efc_late)
+            efc0_frames.append(efc0)
+            if efc50 is not None:
+                efc50_frames.append(efc50)
+     """
 
     # --- assemble + clean + save ---
     if not metadata_rows:
@@ -197,24 +170,21 @@ def main():
         print(f"Cleaned dataset -> {OUTPUT_DIR / 'cell_metadata_cleaned.csv'}")
 
         surviving_ids = set(cleaned_df["cell_id"])
-        if efc_early_frames:
-            efc_early_all = pd.concat(
-                [d for d in efc_early_frames if d["cell_id"].iloc[0] in surviving_ids],
-                ignore_index=True,
-            )
-            efc_early_all.to_parquet(OUTPUT_DIR / "cycle_early_curves.parquet", index=False)
-            print(f"cycle EFC_EARLY curves for surviving cells -> {OUTPUT_DIR / 'cycle_early_curves.parquet'}")
-        else:
-            print(f"No cell had data at cycle_number == {EFC_EARLY} - check EFC_EARLY "
-                  f"against real cycle numbering for these sources (see README).")
+        efc0_all = pd.concat(
+            [d for d in efc0_frames if d["cell_id"].iloc[0] in surviving_ids],
+            ignore_index=True,
+        )
+        efc0_all.to_parquet(OUTPUT_DIR / "efc0_curves.parquet", index=False)
+        print(f"efc0 curves for surviving cells -> {OUTPUT_DIR / 'efc0_curves.parquet'}")
 
-        if efc_late_frames:
-            efc_late_all = pd.concat(
-                [d for d in efc_late_frames if d["cell_id"].iloc[0] in surviving_ids],
+        if efc50_frames:
+            efc50_all = pd.concat(
+                [d for d in efc50_frames if d["cell_id"].iloc[0] in surviving_ids],
                 ignore_index=True,
             )
-            efc_late_all.to_parquet(OUTPUT_DIR / "cycle_late_curves.parquet", index=False)
-            print(f"cycle EFC_LATE curves for surviving cells -> {OUTPUT_DIR / 'cycle_late_curves.parquet'}")
+            efc50_all.to_parquet(OUTPUT_DIR / "efc50_curves.parquet", index=False)
+            print(f"efc50 curves for surviving cells -> {OUTPUT_DIR / 'efc50_curves.parquet'}")
+   
 
     if errors:
         err_df = pd.DataFrame(errors, columns=["cell_id", "source_dataset", "error", "traceback"])
