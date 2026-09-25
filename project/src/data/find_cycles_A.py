@@ -1,9 +1,10 @@
+import glob
+import os
+from pathlib import Path
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from pathlib import Path
-import os
-import glob
 
 Q_NOM = 3.7
 
@@ -12,21 +13,15 @@ Q_NOM = 3.7
 # 1. Calculate global discharge-based EFC
 # ============================================================
 
+
 def calculate_efc(df, q_nom=Q_NOM, reset_threshold=0.1):
 
     df = df.copy()
 
-    discharge_capacity = (
-        df["Discharge_Capacity_Ah"]
-        .astype(float)
-        .to_numpy()
-    )
+    discharge_capacity = df["Discharge_Capacity_Ah"].astype(float).to_numpy()
 
     # Difference between consecutive capacity values
-    dQ = np.diff(
-        discharge_capacity,
-        prepend=discharge_capacity[0]
-    )
+    dQ = np.diff(discharge_capacity, prepend=discharge_capacity[0])
 
     # A significant negative jump indicates that the
     # discharge-capacity counter has reset.
@@ -38,24 +33,16 @@ def calculate_efc(df, q_nom=Q_NOM, reset_threshold=0.1):
     accumulated_capacity = 0.0
 
     for i in range(len(df)):
-
         if reset[i]:
-            accumulated_capacity += (
-                discharge_capacity[i - 1]
-            )
+            accumulated_capacity += discharge_capacity[i - 1]
 
         offset[i] = accumulated_capacity
 
     # Global discharged capacity
-    df["Discharge_Capacity_Global_Ah"] = (
-        discharge_capacity + offset
-    )
+    df["Discharge_Capacity_Global_Ah"] = discharge_capacity + offset
 
     # Global discharge-based EFC
-    df["EFC"] = (
-        df["Discharge_Capacity_Global_Ah"]
-        / q_nom
-    )
+    df["EFC"] = df["Discharge_Capacity_Global_Ah"] / q_nom
 
     return df
 
@@ -81,7 +68,6 @@ def find_charge_events(
     n = len(df)
 
     while i < n:
-
         # ------------------------------------------------------
         # 1. Find potential start of positive charging current
         # ------------------------------------------------------
@@ -111,9 +97,7 @@ def find_charge_events(
             i += 1
             continue
 
-        characteristic_current = np.median(
-            current[reference_indices]
-        )
+        characteristic_current = np.median(current[reference_indices])
 
         # Reject tiny/noisy positive-current regions
         if characteristic_current <= start_threshold:
@@ -131,25 +115,15 @@ def find_charge_events(
         j = start
 
         while j < n:
-
-            relative_deviation = (
-                abs(
-                    current[j]
-                    - characteristic_current
-                )
-                / abs(characteristic_current)
+            relative_deviation = abs(current[j] - characteristic_current) / abs(
+                characteristic_current
             )
 
             if relative_deviation > current_deviation_fraction:
-
                 if deviation_start is None:
                     deviation_start = j
 
-                if (
-                    time[j]
-                    - time[deviation_start]
-                    >= min_deviation_duration_s
-                ):
+                if time[j] - time[deviation_start] >= min_deviation_duration_s:
                     end = deviation_start - 1
                     break
 
@@ -169,25 +143,20 @@ def find_charge_events(
             i += 1
             continue
 
-        duration_h = (
-            time[end] - time[start]
-        ) / 3600.0
+        duration_h = (time[end] - time[start]) / 3600.0
 
-        if (
-            min_duration_h
-            <= duration_h
-            <= max_duration_h
-        ):
-            events.append({
-                "start_idx": start,
-                "end_idx": end,
-                "duration_h": duration_h,
-                "current_A": characteristic_current,
-
-                # EFC is essentially constant during charge,
-                # so one value is enough.
-                "efc": df.loc[start, "EFC"],
-            })
+        if min_duration_h <= duration_h <= max_duration_h:
+            events.append(
+                {
+                    "start_idx": start,
+                    "end_idx": end,
+                    "duration_h": duration_h,
+                    "current_A": characteristic_current,
+                    # EFC is essentially constant during charge,
+                    # so one value is enough.
+                    "efc": df.loc[start, "EFC"],
+                }
+            )
 
         # ------------------------------------------------------
         # 5. Continue searching AFTER this event
@@ -201,15 +170,9 @@ def find_charge_events(
 # 3. Find EFC index
 # ============================================================
 
+
 def find_efc_index(df, target_efc):
-
-    idx = (
-        df["EFC"]
-        .sub(target_efc)
-        .abs()
-        .idxmin()
-    )
-
+    idx = df["EFC"].sub(target_efc).abs().idxmin()
     return idx
 
 
@@ -217,21 +180,16 @@ def find_efc_index(df, target_efc):
 # 4. Distance between a charge event and an EFC index
 # ============================================================
 
-def distance_to_index(event, target_idx):
 
+def distance_to_index(event, target_idx):
     if target_idx < event["start_idx"]:
-        return (
-            event["start_idx"]
-            - target_idx
-        )
+        return event["start_idx"] - target_idx
 
     if target_idx > event["end_idx"]:
-        return (
-            target_idx
-            - event["end_idx"]
-        )
+        return target_idx - event["end_idx"]
 
     return 0
+
 
 def process_battery_file(file_path, save_dir):
     battery_name = os.path.splitext(os.path.basename(file_path))[0]
@@ -248,11 +206,7 @@ def process_battery_file(file_path, save_dir):
     # ------------------------------------------------------------------
     # Calculate global EFC
     # ------------------------------------------------------------------
-    df = calculate_efc(
-        df,
-        q_nom=Q_NOM,
-        reset_threshold=0.1
-    )
+    df = calculate_efc(df, q_nom=Q_NOM, reset_threshold=0.1)
 
     # ------------------------------------------------------------------
     # Identify charge events
@@ -267,10 +221,7 @@ def process_battery_file(file_path, save_dir):
     )
 
     if len(events) < 2:
-        print(
-            f"WARNING: Only {len(events)} charge event(s) "
-            f"found for {battery_name}"
-        )
+        print(f"WARNING: Only {len(events)} charge event(s) found for {battery_name}")
         return
 
     print(f"Found {len(events)} charge events.")
@@ -282,17 +233,11 @@ def process_battery_file(file_path, save_dir):
 
     first_event = events[0]
 
-    efc50_event = min(
-        events,
-        key=lambda event: abs(event["efc"] - efc_target)
-    )
+    efc50_event = min(events, key=lambda event: abs(event["efc"] - efc_target))
 
     # Avoid selecting the same event twice
     if efc50_event["start_idx"] == first_event["start_idx"]:
-        print(
-            "WARNING: The first charge event is also the event "
-            "closest to EFC 50."
-        )
+        print("WARNING: The first charge event is also the event closest to EFC 50.")
         selected_events = [first_event]
     else:
         selected_events = [first_event, efc50_event]
@@ -303,7 +248,6 @@ def process_battery_file(file_path, save_dir):
     curves = []
 
     for i, event in enumerate(selected_events, start=1):
-
         if i == 1:
             event_label = "First charge"
         else:
@@ -313,11 +257,7 @@ def process_battery_file(file_path, save_dir):
         end_idx = event["end_idx"]
 
         event_df = df.loc[start_idx:end_idx].copy()
-
-        event_time = (
-            event_df["Total_Time_Seconds"]
-            - event_df["Total_Time_Seconds"].iloc[0]
-        )
+        event_time = ( event_df["Total_Time_Seconds"] - event_df["Total_Time_Seconds"].iloc[0])
 
         voltage = event_df["Voltage_V"].to_numpy()
 
@@ -342,92 +282,55 @@ def process_battery_file(file_path, save_dir):
     # Each curve has its own time column because the number of samples
     # may differ between the two events.
     # ------------------------------------------------------------------
-    max_length = max(
-        len(curve["time"])
-        for curve in curves
-    )
+    max_length = max(len(curve["time"]) for curve in curves)
 
     processed_df = pd.DataFrame(
         {
-            "Time_1_s": pd.Series(
-                curves[0]["time"]
-            ),
-            "Voltage_1_V": pd.Series(
-                curves[0]["voltage"]
-            ),
-            "Time_2_s": pd.Series(
-                curves[1]["time"]
-            ),
-            "Voltage_2_V": pd.Series(
-                curves[1]["voltage"]
-            ),
+            "Time_1_s": pd.Series(curves[0]["time"]),
+            "Voltage_1_V": pd.Series(curves[0]["voltage"]),
+            "Time_2_s": pd.Series(curves[1]["time"]),
+            "Voltage_2_V": pd.Series(curves[1]["voltage"]),
         }
     )
 
     # ------------------------------------------------------------------
     # Save processed voltage curves
     # ------------------------------------------------------------------
-    output_csv = os.path.join(
-        save_dir,
-        f"Processed_{battery_name}.csv"
-    )
+    output_csv = os.path.join(save_dir, f"Processed_{battery_name}.csv")
 
-    processed_df.to_csv(
-        output_csv,
-        index=False
-    )
+    processed_df.to_csv(output_csv, index=False)
 
-    print(f"Saved voltage curves to:")
+    print("Saved voltage curves to:")
     print(f"  {output_csv}")
 
     # ------------------------------------------------------------------
     # Plot the two charge curves
     # ------------------------------------------------------------------
-  # ------------------------------------------------------------------
-# Plot first charge and EFC50 charge as two subplots
-# ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Plot first charge and EFC50 charge as two subplots
+    # ------------------------------------------------------------------
 
-    fig, axes = plt.subplots(
-        1, 2,
-        figsize=(14, 6),
-        sharey=True
-    )
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
 
     # First charge event (EFC ~ 0)
-    axes[0].plot(
-        curves[0]["time"] / 60.0,
-        curves[0]["voltage"]
-    )
+    axes[0].plot(curves[0]["time"] / 60.0, curves[0]["voltage"])
 
-    axes[0].set_title(
-        f"First charge (EFC = {curves[0]['efc']:.2f})"
-    )
+    axes[0].set_title(f"First charge (EFC = {curves[0]['efc']:.2f})")
     axes[0].set_xlabel("Time [min]")
     axes[0].set_ylabel("Voltage [V]")
     axes[0].grid(True)
 
-
     # Charge event closest to EFC 50
-    axes[1].plot(
-        curves[1]["time"] / 60.0,
-        curves[1]["voltage"]
-    )
+    axes[1].plot(curves[1]["time"] / 60.0, curves[1]["voltage"])
 
-    axes[1].set_title(
-        f"EFC 50 charge (EFC = {curves[1]['efc']:.2f})"
-    )
+    axes[1].set_title(f"EFC 50 charge (EFC = {curves[1]['efc']:.2f})")
     axes[1].set_xlabel("Time [min]")
     axes[1].grid(True)
 
-
     # Overall figure title
-    fig.suptitle(
-        f"{battery_name} - Voltage Curves",
-        fontsize=14
-    )
+    fig.suptitle(f"{battery_name} - Voltage Curves", fontsize=14)
 
     plt.tight_layout()
-
 
     # ------------------------------------------------------------------
     # Save figure
@@ -438,21 +341,12 @@ def process_battery_file(file_path, save_dir):
 
     output_plot = plot_dir / f"{battery_name}_voltage_curves.png"
 
-    plt.savefig(
-        output_plot,
-        dpi=300,
-        bbox_inches="tight"
-    )
+    plt.savefig(output_plot, dpi=300, bbox_inches="tight")
 
     plt.close(fig)
 
     print("Saved plot to:")
     print(f"  {output_plot}")
-
-
-# ==========================================================================
-# MAIN
-
 
 # ============================================================
 # MAIN
@@ -460,34 +354,23 @@ def process_battery_file(file_path, save_dir):
 
 if __name__ == "__main__":
     ### THIS SHOULD BE CHANGED TO MATCH YOUR DESIRED DIRECTORY.
-    save_dir = "/work3/claho/battery_datasets/"
-    DATA_DIR = (
-        "/work3/claho/battery_datasets/lg_mj1/"
-    )
+    save_dir = Path("/work3/claho/battery_datasets/processed/lg_mj1")
+    save_dir.mkdir(parents=True, exist_ok=True)
+    DATA_DIR = "/work3/claho/battery_datasets/lg_mj1/"
     save_dir
-    csv_files = sorted(
-    glob.glob(
-        os.path.join(DATA_DIR, "*.csv")
-    )
-    )
+    csv_files = sorted(glob.glob(os.path.join(DATA_DIR, "*.csv")))
 
     # Do not accidentally process files generated by this script
     csv_files = [
-        f for f in csv_files
-        if not os.path.basename(f).startswith("Processed_")
+        f for f in csv_files if not os.path.basename(f).startswith("Processed_")
     ]
 
     print(f"Found {len(csv_files)} battery files.")
 
     for file_path in csv_files:
-
         try:
-            process_battery_file(file_path)
+            process_battery_file(file_path, save_dir)
 
         except Exception as e:
-
-            print(
-                f"\nERROR processing "
-                f"{os.path.basename(file_path)}:"
-            )
+            print(f"\nERROR processing {os.path.basename(file_path)}:")
             print(e)

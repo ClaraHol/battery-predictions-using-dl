@@ -69,7 +69,8 @@ uv.lock
 # Database
 *.db
 *.rdb
-project/data/
+
+
 
 # Pycharm
 .idea

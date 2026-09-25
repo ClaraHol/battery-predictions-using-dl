@@ -1,9 +1,8 @@
-import numpy as np
-from matplotlib import pyplot as pyplot
-
-
-import pandas as pd
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from matplotlib import pyplot as pyplot
 
 scratch_dir = Path("/work3/claho/battery_datasets/lg_mj1")
 # file_dir = "DrivingAgeing_T25_SOC10-90_Vito_Cell88_AllData"
@@ -13,7 +12,7 @@ scratch_dir = Path("/work3/claho/battery_datasets/lg_mj1")
 file_dir = "DrivingAgeing_T25_SOC70-90_Vito_Cell86_AllData"
 # Single file
 
-df = pd.read_csv(scratch_dir / (file_dir +".csv"))
+df = pd.read_csv(scratch_dir / (file_dir + ".csv"))
 print(list(df.columns))
 
 # Write the first half of the time steps to a separate CSV file.
@@ -35,11 +34,11 @@ step = df["Step"]
 
 n = time.shape[0]
 frac = 0.01
-num_points = int(np.ceil(n*frac))
+num_points = int(np.ceil(n * frac))
 
 
-lower =  648333 - 5000
-upper =  648347
+lower = 648333 - 5000
+upper = 648347
 
 
 time = time[lower:upper]

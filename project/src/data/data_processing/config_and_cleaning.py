@@ -28,7 +28,6 @@ independent of measurement noise.
 import numpy as np
 import pandas as pd
 
-
 # ---------------------------------------------------------------------------
 # Nominal capacities (Ah), from manufacturer datasheets - verified via web
 # search against Murata/Samsung/A123/LG product data, Sep 2026. If a cell's
@@ -36,14 +35,14 @@ import pandas as pd
 # re-check the datasheet before trusting downstream C-rate values.
 # ---------------------------------------------------------------------------
 NOMINAL_CAPACITY_AH = {
-    "snl_a": 2.5,     # A123 ANR26650M1B (LFP)          - confirmed
-    "snl_b": 3.0,     # LG INR18650-HG2                  - confirmed
-    "cmu": 3.12,      # Sony/Murata US18650VTC6          - confirmed (NOT 3.0 - that's rated minimum, not nominal)
-    "tum": 2.6,       # Sony/Murata US18650VTC5A         - confirmed
-    "elt": 3.5,       # LG INR18650-MJ1                  - commonly cited figure, NOT independently confirmed.
-                       #    Sanity-check against real data: max observed discharge_capacity_Ah
-                       #    at a low-rate cycle should land close to 3.5 Ah.
-    "tongji": 2.5,    # Samsung INR18650-25R             - confirmed
+    "snl_a": 2.5,  # A123 ANR26650M1B (LFP)          - confirmed
+    "snl_b": 3.0,  # LG INR18650-HG2                  - confirmed
+    "cmu": 3.12,  # Sony/Murata US18650VTC6          - confirmed (NOT 3.0 - that's rated minimum, not nominal)
+    "tum": 2.6,  # Sony/Murata US18650VTC5A         - confirmed
+    "elt": 3.5,  # LG INR18650-MJ1                  - commonly cited figure, NOT independently confirmed.
+    #    Sanity-check against real data: max observed discharge_capacity_Ah
+    #    at a low-rate cycle should land close to 3.5 Ah.
+    "tongji": 2.5,  # Samsung INR18650-25R             - confirmed
 }
 
 # End-of-life threshold, per the paper's supplementary info:
@@ -62,7 +61,9 @@ MAX_C_RATE = 10.0
 TEMP_ROUND_TO = 5.0
 CRATE_ROUND_TO = 0.5
 
-MIN_CLUSTER_SIZE = 6  # clusters with <= this many cells are dropped (paper: "six or fewer")
+MIN_CLUSTER_SIZE = (
+    6  # clusters with <= this many cells are dropped (paper: "six or fewer")
+)
 
 
 def round_to_grid(value, grid):
@@ -92,7 +93,9 @@ def compute_cycle_life(discharge_capacity_by_cycle: pd.Series) -> int:
     return int(below.index[0])
 
 
-def compute_c_rate(current_A: pd.Series, nominal_capacity_Ah: float, positive_only: bool = None) -> float:
+def compute_c_rate(
+    current_A: pd.Series, nominal_capacity_Ah: float, positive_only: bool = None
+) -> float:
     """
     Mean C-rate over the given current samples.
     positive_only=True  -> only average positive (charge) current
@@ -109,8 +112,15 @@ def compute_c_rate(current_A: pd.Series, nominal_capacity_Ah: float, positive_on
     return float(np.abs(cur).mean()) / nominal_capacity_Ah
 
 
-def build_cell_record(cell_id, source_dataset, temp_C_raw, charge_c_rate_raw,
-                       discharge_c_rate_raw, cycle_life, initial_discharge_capacity_Ah):
+def build_cell_record(
+    cell_id,
+    source_dataset,
+    temp_C_raw,
+    charge_c_rate_raw,
+    discharge_c_rate_raw,
+    cycle_life,
+    initial_discharge_capacity_Ah,
+):
     """Assemble one row of the per-cell metadata table with rounding applied."""
     return {
         "cell_id": cell_id,
@@ -124,7 +134,9 @@ def build_cell_record(cell_id, source_dataset, temp_C_raw, charge_c_rate_raw,
     }
 
 
-def apply_three_step_cleaning(cells_df: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
+def apply_three_step_cleaning(
+    cells_df: pd.DataFrame, verbose: bool = True
+) -> pd.DataFrame:
     """
     Apply, in order:
       1. C-rate filter: drop cells where |charge_c_rate| > 10 or |discharge_c_rate| > 10
@@ -138,7 +150,9 @@ def apply_three_step_cleaning(cells_df: pd.DataFrame, verbose: bool = True) -> p
     n0 = len(df)
 
     # Step 1: C-rate
-    mask_crate = (df["charge_c_rate"].abs() <= MAX_C_RATE) & (df["discharge_c_rate"].abs() <= MAX_C_RATE)
+    mask_crate = (df["charge_c_rate"].abs() <= MAX_C_RATE) & (
+        df["discharge_c_rate"].abs() <= MAX_C_RATE
+    )
     df = df[mask_crate]
     n1 = len(df)
 
@@ -147,16 +161,20 @@ def apply_three_step_cleaning(cells_df: pd.DataFrame, verbose: bool = True) -> p
     n2 = len(df)
 
     # Step 3: cluster size
-    df["operational_cluster"] = list(zip(df["temp_C"], df["charge_c_rate"], df["discharge_c_rate"]))
+    df["operational_cluster"] = list(
+        zip(df["temp_C"], df["charge_c_rate"], df["discharge_c_rate"])
+    )
     cluster_sizes = df["operational_cluster"].value_counts()
     small_clusters = cluster_sizes[cluster_sizes <= MIN_CLUSTER_SIZE].index
     df = df[~df["operational_cluster"].isin(small_clusters)]
     n3 = len(df)
 
     if verbose:
-        print(f"Cleaning: {n0} cells -> {n1} after C-rate filter (-{n0-n1}) "
-              f"-> {n2} after cycle-life filter (-{n1-n2}) "
-              f"-> {n3} after cluster-size filter (-{n2-n3})")
+        print(
+            f"Cleaning: {n0} cells -> {n1} after C-rate filter (-{n0 - n1}) "
+            f"-> {n2} after cycle-life filter (-{n1 - n2}) "
+            f"-> {n3} after cluster-size filter (-{n2 - n3})"
+        )
         print(f"Surviving operational clusters: {df['operational_cluster'].nunique()}")
 
     return df.reset_index(drop=True)
