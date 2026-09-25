@@ -1,0 +1,1 @@
+The pouch cells uses propriotary data about there design which is not aviable to us.x   
