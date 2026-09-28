@@ -265,8 +265,9 @@ class ResidualNetRegressor(nn.Module):
 
 validation_path = (
     PROJECT_ROOT
+    / "models"
     / "Validation_simulations"
-    / "dataset.pt"
+    / f"dataset_{args.chemistry}.pt"
 )
 
 print(f"\nLoading validation data from:\n{validation_path}")
@@ -279,8 +280,16 @@ theta_true, x_val = torch.load(
 theta_true = theta_true.float()
 x_val = x_val.float()
 
+finite = torch.isfinite(x_val).all(dim=1) & torch.isfinite(theta_true).all(dim=1)
+print(f"Dropping {(~finite).sum().item()} non-finite validation curves "
+      f"({finite.sum().item()} / {len(finite)} kept)")
+theta_true = theta_true[finite]
+x_val = x_val[finite]
+
 print("theta:", theta_true.shape)
 print("x:", x_val.shape)
+
+
 
 num_validation = theta_true.shape[0]
 theta_dim = theta_true.shape[1]

@@ -1,4 +1,4 @@
-limport torch
+import torch
 import torch.nn as nn
 import numpy as np
 import sys
@@ -38,8 +38,8 @@ CHEMISTRY_CONFIG = {
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--chemistry", required=True, choices=CHEMISTRY_CONFIG.keys())
-parser.add_argument("--max-epochs", type=int, default=5000)
-parser.add_argument("--patience", type=int, default=20, help="Early stopping patience (epochs with no val improvement)")
+parser.add_argument("--max-epochs", type=int, default=1000)
+parser.add_argument("--patience", type=int, default=30, help="Early stopping patience (epochs with no val improvement)")
 parser.add_argument("--seed", type=int, default=0)
 args = parser.parse_args()
 
@@ -94,6 +94,38 @@ theta = theta.float()
 x = x.float()
 print(f"Loaded dataset: theta {theta.shape}, x {x.shape} from {dataset_path}")
 
+# ------------------------------------------------------------------------
+# Remove simulations containing NaN or Inf
+# ------------------------------------------------------------------------
+
+# A simulation is valid only if ALL values in both x and theta are finite.
+valid_mask = (
+    torch.isfinite(x).all(dim=1)
+    & torch.isfinite(theta).all(dim=1)
+)
+
+n_total = len(valid_mask)
+n_valid = valid_mask.sum().item()
+n_invalid = n_total - n_valid
+
+print(
+    f"Valid simulations: {n_valid}/{n_total} "
+    f"({100 * n_valid / n_total:.2f}%)"
+)
+print(
+    f"Removed invalid simulations: {n_invalid}/{n_total} "
+    f"({100 * n_invalid / n_total:.2f}%)"
+)
+
+x = x[valid_mask]
+theta = theta[valid_mask]
+
+# Safety check
+assert torch.isfinite(x).all()
+assert torch.isfinite(theta).all()
+
+print(f"Dataset after filtering: theta {theta.shape}, x {x.shape}")
+
 x_dim = x.shape[1]
 theta_dim = theta.shape[1]
 
@@ -114,12 +146,12 @@ print("Normalized theta using prior bounds (each target maps to prior range [0, 
 # ------------------------------------------------------------------------
 res_block = 9
 hidden_feature = int(2**8)
-dropout = 0.05
+dropout = 0.2
 use_batch_norm = True
 
 max_num_epochs = args.max_epochs
 batch_size = 256
-lr = 0.00005
+lr = 1*1e-4
 clip = 21.0
 validation_fraction = 0.1
 
@@ -209,6 +241,15 @@ train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size,
 optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 loss_fn = nn.MSELoss()
 
+
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer,
+    mode="min",
+    factor=0.5,      # multiply LR by 0.5
+    patience=5,      # wait 5 epochs without improvement
+    min_lr=1e-7,
+)
+
 output_dir = Path(__file__).resolve().parents[2] / "models" / "MLP_models" / args.chemistry
 output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -241,6 +282,15 @@ if __name__ == "__main__":
             val_pred = model(x_val)
             val_loss = loss_fn(val_pred, theta_val).item()
         val_losses.append(val_loss)
+        scheduler.step(val_loss)
+        current_lr = optimizer.param_groups[0]["lr"]
+
+        print(
+            f"Epoch {epoch + 1:3d} | "
+            f"Train: {epoch_loss:.6f} | "
+            f"Val: {val_loss:.6f} | "
+            f"LR: {current_lr:.2e}"
+        )
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -249,9 +299,7 @@ if __name__ == "__main__":
         else:
             epochs_since_improvement += 1
 
-        if epoch % 50 == 0 or epoch == max_num_epochs - 1:
-            print(f"Epoch {epoch}: train_loss={epoch_loss:.6f}, val_loss={val_loss:.6f}")
-
+    
         if epochs_since_improvement >= args.patience:
             print(f"Early stopping at epoch {epoch} (no val improvement for {args.patience} epochs)")
             break

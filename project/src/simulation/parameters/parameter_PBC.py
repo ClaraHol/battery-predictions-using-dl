@@ -22,19 +22,21 @@ capa_nom = 76  # rated capacity [Ah], useless but necessary
 V_cut_lb = 2.75
 V_cut_ub = 4.2
 ##### Design parameters
-# Total corss-sectional area of the electrode [m^2]
-area = 0
+# The values in the section below are not true or provided by the manifacturer. They are instead estimates, taken form similear chemestry. The thoughts behind this are explained in the read me.
+# ======================================================================== # 
+area = 0.1027 * (capa_nom / 5)
 # Thichness [m]
-L_n = 0
-L_p = 0
-L_s = 0
+L_n = 8.52e-5
+L_p = 7.56e-5
+L_s = 1.2e-5
 # Porosity [-]
-epse_n = 0
-epse_p = 0
-epse_s = 0
+epse_n = 0.25
+epse_p = 0.335
+epse_s = 0.47
 # Particle radius [m]
-Rp_n = 0
-Rp_p = 0
+Rp_n = 5.86e-6
+Rp_p = 5.22e-6
+# =========================================================================== #
 ##### pre-calculated parameters
 # Maximum solid-phase lithium concentration
 Cs_max_n = 30675
