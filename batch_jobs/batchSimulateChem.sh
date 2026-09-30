@@ -1,4 +1,4 @@
-#BSUB -J SimulateChem[1-8]
+#BSUB -J SimulateChem[1-9]
 #BSUB -o outputs/SimulateChem_%J_%I.out
 #BSUB -e outputs/SimulateChem_%J_%I.err
 #BSUB -n 8
