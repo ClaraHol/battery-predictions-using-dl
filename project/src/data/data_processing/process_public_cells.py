@@ -7,13 +7,75 @@ parsers.py) and produces:
      later doesn't require re-parsing every raw file)
 """
 
+import numpy as np
 import pandas as pd
 
-from project.src.data.data_processing.config_and_cleaning import (
+
+from config_and_cleaning import (
     build_cell_record,
     compute_c_rate,
     compute_cycle_life,
+    NOMINAL_CAPACITY_AH
 )
+
+def compute_efc(df:pd.DataFrame, q_nom: float, reset_threshold = 0.1):
+    df = df.copy()
+
+    discharge_capacity = df["discharge_capacity_Ah"].astype(float).to_numpy()
+
+    # Difference between consecutive capacity values
+    dQ = np.diff(discharge_capacity, prepend=discharge_capacity[0])
+
+    # A significant negative jump indicates that the
+    # discharge-capacity counter has reset.
+    reset = dQ < -reset_threshold
+
+    # Accumulated capacity before each reset
+    offset = np.zeros(len(df))
+
+    accumulated_capacity = 0.0
+
+    for i in range(len(df)):
+        if reset[i]:
+            accumulated_capacity += discharge_capacity[i - 1]
+
+        offset[i] = accumulated_capacity
+
+    # Global discharged capacity
+    df["Discharge_Capacity_Global_Ah"] = discharge_capacity + offset
+
+    # Global discharge-based EFC
+    df["EFC"] = df["Discharge_Capacity_Global_Ah"] / q_nom
+
+    df = df.copy()
+
+    discharge_capacity = df["Discharge_Capacity_Ah"].astype(float).to_numpy()
+
+    # Difference between consecutive capacity values
+    dQ = np.diff(discharge_capacity, prepend=discharge_capacity[0])
+
+    # A significant negative jump indicates that the
+    # discharge-capacity counter has reset.
+    reset = dQ < -reset_threshold
+
+    # Accumulated capacity before each reset
+    offset = np.zeros(len(df))
+
+    accumulated_capacity = 0.0
+
+    for i in range(len(df)):
+        if reset[i]:
+            accumulated_capacity += discharge_capacity[i - 1]
+
+        offset[i] = accumulated_capacity
+
+    # Global discharged capacity
+    df["Discharge_Capacity_Global_Ah"] = discharge_capacity + offset
+
+    # Global discharge-based EFC
+    df["EFC"] = df["Discharge_Capacity_Global_Ah"] / q_nom
+    return df
+
 
 
 def process_cell(
@@ -26,13 +88,13 @@ def process_cell(
     (e.g. the cell died before reaching cycle 50 - still worth keeping the
     metadata row, just without an efc50 snapshot).
     """
-    from project.src.data.data_processing.config_and_cleaning import NOMINAL_CAPACITY_AH
 
     nominal_cap = NOMINAL_CAPACITY_AH[source_dataset]
 
     # --- cycle life: first cycle where per-cycle discharge capacity drops
     # to 90% of the initial cycle's discharge capacity ---
-    per_cycle_discharge_cap = df.groupby("cycle_number")["discharge_capacity_Ah"].max()
+    print(f"Process {cell_id}")
+    per_cycle_discharge_cap = df[cell_id]["voltage_curves"].groupby("cycle_number")["discharge_capacity_Ah"].max()
     cycle_life = compute_cycle_life(per_cycle_discharge_cap)
 
     # --- charge/discharge C-rate: mean over the whole cell's history.
@@ -60,9 +122,14 @@ def process_cell(
 
     target_cycles_present = df["cycle_number"].unique()
     if efc_target in target_cycles_present:
-        efc_target_df = df[df["cycle_number"] == efc_target].copy()
-        efc_target_df["cell_id"] = cell_id
+        efc50_df = compute_efc(df, q_nom = NOMINAL_CAPACITY_AH)
+        closest_efc =  efc50_df.sub(efc_target).abs().min()
+        efc50_df = efc50_df[efc50_df["EFC"] == closest_efc]
+        #efc_target_df = df[df["cycle_number"] == efc_target].copy()
+        efc50_df["cell_id"] = cell_id
+        print(efc50_df.head())
     else:
-        efc_target_df = None
+        efc50_df = None
 
-    return metadata, efc0_df, efc_target_df
+    return metadata, efc0_df, efc50_df
+

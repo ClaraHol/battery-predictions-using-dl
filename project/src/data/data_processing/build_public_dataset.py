@@ -25,18 +25,18 @@ from pathlib import Path
 
 import pandas as pd
 
-from project.src.data.data_processing.config_and_cleaning import (
+from config_and_cleaning import (
     apply_three_step_cleaning,
 )
-from project.src.data.data_processing.parsers import (
+from parsers import (
     parse_cmu_vtc6,
     parse_lgmj1,
     parse_samsung25r,
     parse_samsung25r_filename,
-    parse_snl_xlsx,
+    parse_snl_voltage_timeseries,
     parse_vtc5a_mat,
 )
-from project.src.data.data_processing.process_public_cells import process_cell
+from process_public_cells import process_cell
 
 DATA_ROOT = Path("/work3/claho/battery_datasets")
 OUTPUT_DIR = Path("/work3/claho/battery_datasets/processed")
@@ -53,7 +53,7 @@ def safe_process(df, cell_id, source_dataset, errors):
     """Wraps process_cell so one bad file doesn't kill the whole run."""
     try:
         return process_cell(
-            df, cell_id, source_dataset, efc_early=EFC_EARLY, efc_late=EFC_LATE
+            df, cell_id, source_dataset, efc_target=EFC_LATE
         )
     except Exception as e:
         errors.append((cell_id, source_dataset, str(e), traceback.format_exc()))
@@ -67,107 +67,107 @@ def main():
     efc_late_frames = []
     errors = []
 
-    # --- Sony-VTC6 (CMU) ---
-    vtc6_dir = DATA_ROOT / "sony_vtc6"
-    vtc6_files = list(vtc6_dir.glob("**/*.csv"))
-    # skip the *_impedance.csv companion files - not cycling data
-    vtc6_files = [f for f in vtc6_files if "impedance" not in f.name.lower()]
-    print(f"[cmu] found {len(vtc6_files)} files under {vtc6_dir}")
-    for f in vtc6_files:
-        cell_id = f"cmu_{f.stem}"
-        try:
-            df = parse_cmu_vtc6(f)
-        except Exception as e:
-            errors.append((cell_id, "cmu", str(e), traceback.format_exc()))
-            continue
-        meta, efc_early, efc_late = safe_process(df, cell_id, "cmu", errors)
-        if meta:
-            metadata_rows.append(meta)
-            if efc_early is not None:
-                efc_early_frames.append(efc_early)
-            if efc_late is not None:
-                efc_late_frames.append(efc_late)
-
-    # --- Sony-VTC5A (TUM) - cyclic/dynamic only, calendar aging excluded ---
-    tum_dir = DATA_ROOT / "sony_vtc5a_raw"
-    tum_files = list(tum_dir.glob("**/*.mat"))
-    tum_files = [f for f in tum_files if "calendar" not in str(f).lower()]
-    print(
-        f"[tum] found {len(tum_files)} cyclic/dynamic files under {tum_dir} "
-        f"(calendar-aging files excluded)"
-    )
-    for f in tum_files:
-        cell_id = f"tum_{f.stem}"
-        try:
-            df = parse_vtc5a_mat(f)
-        except Exception as e:
-            errors.append((cell_id, "tum", str(e), traceback.format_exc()))
-            continue
-        meta, efc_early, efc_late = safe_process(df, cell_id, "tum", errors)
-        if meta:
-            metadata_rows.append(meta)
-            if efc_early is not None:
-                efc_early_frames.append(efc_early)
-            if efc_late is not None:
-                efc_late_frames.append(efc_late)
-
-    # --- LG-MJ1 (4TU) - NEEDS temperature per file, not yet wired up ---
-    elt_dir = DATA_ROOT / "lg_mj1"
-    elt_files = list(elt_dir.glob("**/*.csv"))
-    print(f"[elt] found {len(elt_files)} files under {elt_dir}")
-    if elt_files:
-        print(
-            "  [SKIPPED] parse_lgmj1() needs temp_C_nameplate per file, decoded "
-            "from filename/folder (25C vs 45C) - fill in FILENAME_TO_TEMP below "
-            "once you can see real LG-MJ1 filenames, then remove this skip."
-        )
-        try:
-            df = parse_lgmj1(f)
-        except Exception as e:
-            errors.append((cell_id, "lg_mj1", str(e), traceback.format_exc()))
-        meta, efc0, efc50 = safe_process(df, cell_id, "elt", errors)
-        if meta:
-            metadata_rows.append(meta)
-            if efc0 is not None:
-                efc_early_frames.append(efc0)
-            if efc50 is not None:
-                efc_late_frames.append(efc50)
-    # Example of what this loop should look like once filenames are known:
-    # FILENAME_TO_TEMP = {"...25C...": 25.0, "...45C...": 45.0}
-    # for f in elt_files:
-    #     cell_id = f"elt_{f.stem}"
-    #     temp = next((t for pat, t in FILENAME_TO_TEMP.items() if pat in f.name), None)
-    #     if temp is None:
-    #         errors.append((cell_id, "elt", "no temperature match for filename", ""))
+    # # --- Sony-VTC6 (CMU) ---
+    # vtc6_dir = DATA_ROOT / "sony_vtc6"
+    # vtc6_files = list(vtc6_dir.glob("**/*.csv"))
+    # # skip the *_impedance.csv companion files - not cycling data
+    # vtc6_files = [f for f in vtc6_files if "impedance" not in f.name.lower()]
+    # print(f"[cmu] found {len(vtc6_files)} files under {vtc6_dir}")
+    # for f in vtc6_files:
+    #     cell_id = f"cmu_{f.stem}"
+    #     try:
+    #         df = parse_cmu_vtc6(f)
+    #     except Exception as e:
+    #         errors.append((cell_id, "cmu", str(e), traceback.format_exc()))
     #         continue
-    #     df = parse_lgmj1(f, temp_C_nameplate=temp)
-    #     meta, efc_early, efc_late = safe_process(df, cell_id, "elt", errors)
-    #     ...
+    #     meta, efc_early, efc_late = safe_process(df, cell_id, "cmu", errors)
+    #     if meta:
+    #         metadata_rows.append(meta)
+    #         if efc_early is not None:
+    #             efc_early_frames.append(efc_early)
+    #         if efc_late is not None:
+    #             efc_late_frames.append(efc_late)
 
-    # --- Samsung-25R (Zhu et al.) ---
-    tongji_dir = DATA_ROOT / "samsung_25r"
-    tongji_files = list(tongji_dir.glob("**/*.csv"))
-    print(f"[tongji] found {len(tongji_files)} files under {tongji_dir}")
-    for f in tongji_files:
-        cell_id = f"tongji_{f.stem}"
-        try:
-            temp_C, charge_c_nameplate, discharge_c_nameplate = (
-                parse_samsung25r_filename(f.name)
-            )
-            df = parse_samsung25r(f)
-            df["temp_C"] = (
-                temp_C  # filename-derived, more reliable than any per-row estimate
-            )
-        except Exception as e:
-            errors.append((cell_id, "tongji", str(e), traceback.format_exc()))
-            continue
-        meta, efc_early, efc_late = safe_process(df, cell_id, "tongji", errors)
-        if meta:
-            metadata_rows.append(meta)
-            if efc_early is not None:
-                efc_early_frames.append(efc_early)
-            if efc_late is not None:
-                efc_late_frames.append(efc_late)
+    # # --- Sony-VTC5A (TUM) - cyclic/dynamic only, calendar aging excluded ---
+    # tum_dir = DATA_ROOT / "sony_vtc5a_raw"
+    # tum_files = list(tum_dir.glob("**/*.mat"))
+    # tum_files = [f for f in tum_files if "calendar" not in str(f).lower()]
+    # print(
+    #     f"[tum] found {len(tum_files)} cyclic/dynamic files under {tum_dir} "
+    #     f"(calendar-aging files excluded)"
+    # )
+    # for f in tum_files:
+    #     cell_id = f"tum_{f.stem}"
+    #     try:
+    #         df = parse_vtc5a_mat(f)
+    #     except Exception as e:
+    #         errors.append((cell_id, "tum", str(e), traceback.format_exc()))
+    #         continue
+    #     meta, efc_early, efc_late = safe_process(df, cell_id, "tum", errors)
+    #     if meta:
+    #         metadata_rows.append(meta)
+    #         if efc_early is not None:
+    #             efc_early_frames.append(efc_early)
+    #         if efc_late is not None:
+    #             efc_late_frames.append(efc_late)
+
+    # # --- LG-MJ1 (4TU) - NEEDS temperature per file, not yet wired up ---
+    # elt_dir = DATA_ROOT / "lg_mj1"
+    # elt_files = list(elt_dir.glob("**/*.csv"))
+    # print(f"[elt] found {len(elt_files)} files under {elt_dir}")
+    # if elt_files:
+    #     print(
+    #         "  [SKIPPED] parse_lgmj1() needs temp_C_nameplate per file, decoded "
+    #         "from filename/folder (25C vs 45C) - fill in FILENAME_TO_TEMP below "
+    #         "once you can see real LG-MJ1 filenames, then remove this skip."
+    #     )
+    #     # try:
+    #     #     df = parse_lgmj1(f)
+    #     # except Exception as e:
+    #     #     errors.append((cell_id, "lg_mj1", str(e), traceback.format_exc()))
+    #     # meta, efc0, efc50 = safe_process(df, cell_id, "elt", errors)
+    #     # if meta:
+    #     #     metadata_rows.append(meta)
+    #     #     if efc0 is not None:
+    #     #         efc_early_frames.append(efc0)
+    #     #     if efc50 is not None:
+    #     #         efc_late_frames.append(efc50)
+    # # Example of what this loop should look like once filenames are known:
+    # # FILENAME_TO_TEMP = {"...25C...": 25.0, "...45C...": 45.0}
+    # # for f in elt_files:
+    # #     cell_id = f"elt_{f.stem}"
+    # #     temp = next((t for pat, t in FILENAME_TO_TEMP.items() if pat in f.name), None)
+    # #     if temp is None:
+    # #         errors.append((cell_id, "elt", "no temperature match for filename", ""))
+    # #         continue
+    # #     df = parse_lgmj1(f, temp_C_nameplate=temp)
+    # #     meta, efc_early, efc_late = safe_process(df, cell_id, "elt", errors)
+    # #     ...
+
+    # # --- Samsung-25R (Zhu et al.) ---
+    # tongji_dir = DATA_ROOT / "samsung_25r"
+    # tongji_files = list(tongji_dir.glob("**/*.csv"))
+    # print(f"[tongji] found {len(tongji_files)} files under {tongji_dir}")
+    # for f in tongji_files:
+    #     cell_id = f"tongji_{f.stem}"
+    #     try:
+    #         temp_C, charge_c_nameplate, discharge_c_nameplate = (
+    #             parse_samsung25r_filename(f.name)
+    #         )
+    #         df = parse_samsung25r(f)
+    #         df["temp_C"] = (
+    #             temp_C  # filename-derived, more reliable than any per-row estimate
+    #         )
+    #     except Exception as e:
+    #         errors.append((cell_id, "tongji", str(e), traceback.format_exc()))
+    #         continue
+    #     meta, efc_early, efc_late = safe_process(df, cell_id, "tongji", errors)
+    #     if meta:
+    #         metadata_rows.append(meta)
+    #         if efc_early is not None:
+    #             efc_early_frames.append(efc_early)
+    #         if efc_late is not None:
+    #             efc_late_frames.append(efc_late)
 
     # --- Sandia SNL (A123-M1A + LG-HG2) - UNVERIFIED parser, see parsers.py ---
     snl_dir = DATA_ROOT / "sandia_snl"
@@ -181,13 +181,17 @@ def main():
     for f in snl_files:
         # A123 cells are LFP chemistry (snl_a), LG-HG2 cells are NMC (snl_b) -
         # adjust this split once you know the real filename convention.
-        if "lfp" in f.name.lower():
+        if ("summary" in f.name.lower()) or ("voltage" in f.name.lower()): 
+            continue
+        elif "lfp" in f.name.lower():
             source = "snl_a"
         elif "nmc" in f.name.lower():
             source = "snl_b"
-        cell_id = f"{source}_{f.stem}"
+        else: continue
+        cell_id = f"{f.name.lower()}"
+        print(f"Input: {cell_id}")
         try:
-            df = parse_snl_xlsx(f)
+            df = parse_snl_voltage_timeseries(f)
         except Exception as e:
             errors.append((cell_id, source, str(e), traceback.format_exc()))
             continue
