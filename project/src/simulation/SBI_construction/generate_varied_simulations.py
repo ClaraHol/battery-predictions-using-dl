@@ -20,7 +20,7 @@ sys.path.append(str(Path(__file__).resolve().parents[3]))
 
 import os
 
-from src.simulation.battery_simulator import simulator
+from src.simulation.battery_simulator_varied import simulator_v2
 
 # ==============================================================================
 # CODE ATTRIBUTION & ADAPTATION NOTICE
@@ -151,36 +151,44 @@ params_setting = params_module.params_setting
 checkpoint_dir = (
     Path(__file__).resolve().parents[3]
     / "models"
-    / "sim_chunks"
+    / "Varied_sim_chunks"
     / config["output_subdir"]
 )
 dataset_path = (
     Path(__file__).resolve().parents[3]
     / "models"
-    / "Full_simulations"
+    / "Varied_simulations"
     / f"dataset_{args.chemistry}.pt"
 )
 
 # Set charging conditions and the voltage cut off
 Q_rated = config["Q_rated"]
-current = config["current"]
-dod = config["dod"]
+
 V_cut_lb = config["V_cut_lb"]
 V_cut_ub = config["V_cut_ub"]
 
-num_workers = 8
+num_workers = 1
 
 # Define the number of sample trials, 50000 is used in this work
 num_simulations = 50000
-num_dim = 11
+num_dim = 9
 
 
-t_typ = np.abs(3600 * Q_rated * dod / current)
-t_sim = np.abs(int(3700 * Q_rated * dod / current))
+## The low capacity range
+l_low = 0.1
+l_high = 0.4
 
+## The high capacity range
+h_low = 0.6
+h_high = 0.9
 
-def t_normal(data):
-    return data / t_typ
+## Charge C-rate range (negative PyBaMM current)
+crp_low = 0.25
+crp_high = 1
+## Discharge C-rate range (positive PyBaMM current)(note I balance things such that half the dicharges are between low and mid and half between mid and high)
+crn_low = 0.25
+crn_mid = 1
+crn_high = 3
 
 
 def v_normal(data):
@@ -215,31 +223,106 @@ def my_model(params):
         else:
             this_param.append(params[j])
 
+    # Parameters needed by params_setting(), but NOT SBI targets
+    for j in range(9, 11):
+        low, high = list(params_log.values())[j]
+
+        value = np.random.uniform(low, high)
+
+        if list(params_log_flag.values())[j] == 1:
+            value = 10 ** value
+
+        this_param.append(value)
+
     params = params_setting(this_param)
-    results = simulator(params, current, t_sim)
+
+    low_charge_bound = np.random.uniform(low = l_low, high = l_high)
+    high_charge_bound = np.random.uniform(low = h_low, high = h_high)
+
+    sign = np.random.choice([-1,1])
+
+    if sign > 0:
+        random_decider = np.random.choice([0,1])
+        soc_start = high_charge_bound
+        soc_end = low_charge_bound
+        if random_decider:
+            charge_rate = np.random.uniform(crn_low, crn_mid)
+        else:
+            charge_rate = np.random.uniform(crn_mid,crn_high)
+    else:
+        soc_start = low_charge_bound
+        soc_end = high_charge_bound 
+        charge_rate = np.random.uniform(crp_low, crp_high)
+    
+
+    soc_window = abs(soc_end - soc_start)
+
+    current = sign * charge_rate * Q_rated
+    t_sim = 3600.0 * soc_window / charge_rate
+
+
+
+    results = simulator_v2(params, current, t_sim, soc_start)
+
     num_points = 100
     s = torch.normal(0, 0.005, size=(num_points,))
     if isinstance(results, str):
         ############# abnormal
 
-        return np.full(num_points, np.nan)
-    else:
-        ############# normal
-        Voltage = torch.tensor(results["Terminal voltage [V]"].entries)
-        Time = torch.tensor(results["Time [s]"].entries)
+        return np.full(num_points+8, np.nan)
 
-        this_t = np.linspace(0, Time[-1], num_points)
-        f = interp1d(Time, Voltage, kind="slinear")
+    Voltage = torch.tensor(results["Terminal voltage [V]"].entries, dtype = torch.float32)
 
-        this_v = torch.tensor(f(this_t)) + s
+    Time = torch.tensor(results["Time [s]"].entries, dtype = torch.float32)
 
-        #############
+    time_np = Time.numpy()
+    voltage_np = Voltage.numpy()
+
+    if (
+        len(time_np) < 2
+        or len(voltage_np) < 2
+        or not np.isfinite(time_np).all()
+        or not np.isfinite(voltage_np).all()
+    ):
+        return np.full(num_points + 8, np.nan)
+
+    # Remove duplicate timestamps, keeping the first occurrence
+    _, unique_idx = np.unique(time_np, return_index=True)
+    unique_idx = np.sort(unique_idx)
+
+    time_np = time_np[unique_idx]
+
+
+
+    if len(time_np) < 2:
+        return np.full(num_points + 8, np.nan)
+
+    voltage_np = voltage_np[unique_idx]
+    t_end = time_np[-1]
+
+    this_t = np.linspace(0.0, time_np[-1], num_points)
+
+    f = interp1d(time_np, voltage_np, kind="slinear")
+    this_v = torch.tensor(f(this_t), dtype = torch.float32)
+
+    # Add noise
+    this_v += s
+    # Normalize using voltage bounds
     v_norm = v_normal(this_v)
-    t_norm = t_normal(this_t)
-    # This is a very weird way to encode time. Time steps ae uniform so only the stop time is actually relevant.
-    # We also destroy information since 0.25 + 0.25 = 0.5 + 0 = 0 + 0.5, a smarter way to do it would be adding the final time
-    # as a additional observation (giving 101 points)
-    y_obs = torch.sqrt(t_norm**2 + v_norm**2)
+ 
+
+    conditions = torch.tensor([
+    charge_rate,
+    sign,
+    soc_start,
+    soc_end,
+    Q_rated,
+    V_cut_lb,
+    V_cut_ub,
+    t_end / 3600.0,
+    ], dtype = torch.float32)
+
+    y_obs = torch.cat([v_norm, conditions])
 
     return y_obs
 
@@ -302,6 +385,12 @@ theta, x = run_simulations_with_checkpoints(
     chunk_size=1000,
     checkpoint_dir=checkpoint_dir,
 )
+
+
+valid = torch.isfinite(theta).all(dim=1) & torch.isfinite(x).all(dim=1)
+
+theta = theta[valid]
+x = x[valid]
 
 
 dataset_path.parent.mkdir(parents=True, exist_ok=True)
