@@ -8,7 +8,7 @@ import pyarrow.parquet as pq
 DATA_ROOT = Path("/work3/claho/battery_datasets/processed/")
 OUTPUT_DIR = Path("project/reports/figures/public_cells")
 metadata_path = "public_cell_metadata_cleaned.csv"
-metadata = pd.read_csv(DATA_ROOT / "voltage_timeseries_all_cells.csv")
+metadata = pd.read_csv(DATA_ROOT/ metadata_path)
 
 
 cycle_lives = {}
@@ -22,13 +22,15 @@ for source, group in metadata.groupby("source_dataset"):
     temps[source] = group["temp_C"]
 
 
-fig, ax = plt.subplots(2, 2)
-ax[0,0].boxplot(cycle_lives.values(), labels = cycle_lives.keys())
+fig, ax = plt.subplots(2, 2, figsize=(12, 8))
+ax[0,0].boxplot(cycle_lives.values(), tick_labels = cycle_lives.keys())
 ax[0,0].set_title("Cycle life")
-ax[0,1].boxplot(temps.values(), labels = temps.keys())
-ax[0,1].set_title("Cycle life")
-ax[1,0].boxplot(chrg_rates.values(), labels = chrg_rates.keys())
+ax[0,1].boxplot(temps.values(), tick_labels = temps.keys())
+ax[0,1].set_title("Temperature")
+ax[1,0].boxplot(chrg_rates.values(), tick_labels = chrg_rates.keys())
 ax[1,0].set_title("Charge C-Rate")
-ax[1,1].boxplot(dchrg_rates.values(), labels = dchrg_rates.keys())
+ax[1,1].boxplot(dchrg_rates.values(), tick_labels = dchrg_rates.keys())
 ax[1,1].set_title("Discharge C-Rate")
+plt.tight_layout()
 plt.savefig(OUTPUT_DIR/"metadata_boxplot")
+import pyarrow.parquet as pq

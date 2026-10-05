@@ -43,28 +43,18 @@ STANDARD_COLUMNS = [
 # ---------------------------------------------------------------------------
 # Sony-VTC6 (CMU / KiltHub)
 # ---------------------------------------------------------------------------
-
-
 def parse_cmu_vtc6(csv_path: str) -> pd.DataFrame:
-    raw = pd.read_csv(csv_path).sort_values("time_s").reset_index(drop=True)
-    
-
+    df = pd.read_csv(csv_path)
     out = pd.DataFrame({
-        "time_s": raw["time_s"],
-        "voltage_V": raw["Ecell_V"],
-        "current_A": raw["I_mA"] / 1000.0,
-        "temp_C": raw["Temperature__C"],
-
-        # Keep these for CMU-specific diagnostics
-        "cycle_number": raw["cycleNumber"].astype(int),
-        "Ns": raw["Ns"].astype(int),
-
-        "charge_capacity_Ah": raw["QCharge_mA_h"] / 1000.0,
-        "discharge_capacity_Ah": raw["QDischarge_mA_h"] / 1000.0,
+        "time_s": df["time_s"],
+        "voltage_V": df["Ecell_V"],
+        "current_A": df["I_mA"] / 1000.0,
+        "temp_C": df["Temperature__C"],
+        "cycle_number": df["cycleNumber"].astype(int),
+        "charge_capacity_Ah": df["QCharge_mA_h"] / 1000.0,
+        "discharge_capacity_Ah": df["QDischarge_mA_h"] / 1000.0,
     })
-
-
-    return out
+    return out[STANDARD_COLUMNS]
 
 
 # ---------------------------------------------------------------------------
@@ -107,12 +97,8 @@ def parse_vtc5a_mat(mat_path: str) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 def parse_lgmj1_filename(csv_path: str):
     temp_C = int(re.search(r'T(\d+)', csv_path.name).group(1))
-    if "driving" in csv_path.name.lower():
-        chrg_c = None
-        dchrg_c = None
-    else:
-        chrg_c = float(re.search(r"Ch(\d+(?:\.\d+)?)C", csv_path.name).group(1))
-        dchrg_c = float(re.search(r"Dch(\d+(?:\.\d+)?)C", csv_path.name).group(1))
+    chrg_c = float(re.search(r"Ch(\d+(?:\.\d+)?)C", s).group(1))
+    dchrg_c = float(re.search(r"Dch(\d+(?:\.\d+)?)C", s).group(1))
     return temp_C, chrg_c, dchrg_c
     
 def parse_lgmj1(csv_path: str) -> pd.DataFrame:
@@ -303,10 +289,7 @@ def parse_snl_cycle_summary(csv_path: str) -> dict:
     out = {}
     for cell_id, group in df.groupby("cell_id"):
         out[cell_id] = group[["cycle_index", "ah_c", "ah_d"]].sort_values("cycle_index").reset_index(drop=True)
-
-    return out.rename(columns={"cycle_index": "cycle_number", "ah_d":"discharge_capacity_Ah"})
-
-
+    return out
 #-------------------------------------------------------------------------------------------------------------
 # Pouch Cells (DL paper own data)
 #-------------------------------------------------------------------------------------------------------------

@@ -8,7 +8,8 @@ parsers.py) and produces:
 """
 
 import pandas as pd
-from config_and_cleaning import build_cell_record, compute_cycle_life_robust, compute_cc_c_rate, calculate_efc
+from cmu_processing import  cmu_cycle_life
+from config_and_cleaning import build_cell_record, compute_cycle_life_robust, compute_cc_c_rate, calculate_efc, find_capacity_checks
 
 
 def process_cell(df: pd.DataFrame, cell_id: str, source_dataset: str,
@@ -37,7 +38,13 @@ def process_cell(df: pd.DataFrame, cell_id: str, source_dataset: str,
     # --- cycle life: first cycle where per-cycle discharge capacity drops
     # to 90% of the initial cycle's discharge capacity ---
     per_cycle_discharge_cap = df.groupby("cycle_number")["discharge_capacity_Ah"].max()
-    life = compute_cycle_life_robust(per_cycle_discharge_cap, nominal_cap)
+    if source_dataset == "cmu":
+        life = cmu_cycle_life(df)
+
+    else:
+      
+        life = compute_cycle_life_robust(df, per_cycle_discharge_cap, nominal_cap)
+    
 
     # --- charge/discharge C-rate: mean over the whole cell's history.
     # (The protocol is fixed per cell across its life for these datasets,
@@ -82,6 +89,7 @@ def process_cell(df: pd.DataFrame, cell_id: str, source_dataset: str,
  
 
     efcs = df["EFC"].dropna().drop_duplicates()
+    #print(efcs)
 
     if efc_early >= efcs.min():
         efc_early_df = df[df["cycle_number"] == efc_early].copy()
