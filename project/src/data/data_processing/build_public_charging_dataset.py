@@ -41,14 +41,14 @@ from pathlib import Path
 import pandas as pd
 
 from parsers import (
-    parse_cmu_vtc6, parse_vtc5a_mat, parse_lgmj1, parse_lgmj1_filename,
+    parse_cmu_vtc6, parse_vtc5a, parse_lgmj1, parse_lgmj1_filename,
     parse_samsung25r, parse_samsung25r_filename, parse_snl_voltage_timeseries, parse_snl_cycle_summary
 )
 from process_cell import process_cell
 from config_and_cleaning import apply_three_step_cleaning, build_cell_record, calculate_efc, find_capacity_checks, NOMINAL_CAPACITY_AH
 
 DATA_ROOT = Path(f"/work3/claho/battery_datasets")
-OUTPUT_DIR = Path(f"/work3/claho/battery_datasets/processed_test_2")
+OUTPUT_DIR = Path(f"/work3/claho/battery_datasets/processed")
 
 EFC_EARLY = 1
 EFC_LATE = 50
@@ -90,13 +90,13 @@ def main():
     # --- Sony-VTC5A (TUM), cyclic/dynamic only ---
 
     tum_dir = DATA_ROOT / "sony_vtc5a"
-    tum_files = [f for f in tum_dir.glob("**/*.mat") if "calendar" not in str(f).lower()]
+    tum_files = [f for f in tum_dir.glob("**/*.csv") if "calendar" not in str(f).lower()]
     print(f"[tum] found {len(tum_files)} cyclic/dynamic files")
     for f in tum_files:
         cell_id = f"tum_{f.stem}"
         try:
             
-            df = parse_vtc5a_mat(f)
+            df = parse_vtc5a(f)
             meta, efc0, efc50 = process_cell(df, cell_id, "tum", efc_early=EFC_EARLY, efc_late=EFC_LATE)
             metadata_rows.append(meta)
             add_charging_curves(efc0, efc50, cell_id, charging_early_frames, charging_late_frames)

@@ -92,7 +92,8 @@ def process_cell(df: pd.DataFrame, cell_id: str, source_dataset: str,
     #print(efcs)
 
     if efc_early >= efcs.min():
-        efc_early_df = df[df["cycle_number"] == efc_early].copy()
+        closest = efcs.loc[(efcs).abs().idxmin()]
+        efc_early_df = df[df["EFC"] == closest].copy()
         efc_early_df["cell_id"] = cell_id
     else:
         efc_early_df = None

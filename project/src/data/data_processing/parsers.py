@@ -68,30 +68,29 @@ def parse_cmu_vtc6(csv_path: str) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Sony-VTC5A (TUM / mediaTUM) - MATLAB v5 struct
+# Sony-VTC5A (TUM / mediaTUM) - Processed csv files
 # ---------------------------------------------------------------------------
-def parse_vtc5a_mat(mat_path: str) -> pd.DataFrame:
-    import scipy.io as sio
+def parse_vtc5a(csv_path: str) -> pd.DataFrame:
 
-    mat = sio.loadmat(mat_path, struct_as_record=False, squeeze_me=True)
-    ds = mat["Dataset"]
+    raw = pd.read_csv(csv_path).sort_values("Time").reset_index(drop=True)
+
 
     # The high-resolution arrays (Time, U, I, Ah, T1, CycCount, ...) are all
     # the same length; the low-res setpoint arrays (DateTime, AhChSet, ...)
     # are a different, shorter length and are NOT used here.
-    n = len(ds.Time)
+
     out = pd.DataFrame({
-        "time_s": np.asarray(ds.Time, dtype=float),
-        "voltage_V": np.asarray(ds.U, dtype=float),
-        "current_A": np.asarray(ds.I, dtype=float),
-        "temp_C": np.asarray(ds.T1, dtype=float),
-        "cycle_number": np.asarray(ds.CycCount, dtype=int),
+        "time_s": np.asarray(raw["Time"], dtype=float),
+        "voltage_V": np.asarray(raw["U"], dtype=float),
+        "current_A": np.asarray(raw["I"], dtype=float),
+        "temp_C": np.asarray(raw["T1"], dtype=float),
+        "cycle_number": np.asarray(raw["CycCount"], dtype=int),
     })
 
     # Ah is a signed cumulative counter in this dataset (not separate
     # charge/discharge columns) - split by sign of current to reconstruct
     # per-cycle charge/discharge capacity the same way as the other sources.
-    ah = np.asarray(ds.Ah, dtype=float)
+    ah = np.asarray(raw["Ah"], dtype=float)
     is_charge = out["current_A"] > 0
     out["charge_capacity_Ah"] = np.where(is_charge, ah, np.nan)
     out["discharge_capacity_Ah"] = np.where(~is_charge, -ah, np.nan)
