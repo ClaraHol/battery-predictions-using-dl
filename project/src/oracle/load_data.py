@@ -2,8 +2,9 @@ import pandas as pd
 
 data_dir = "/work3/claho/battery_datasets/processed/"
 
-efc0 = pd.read_parquet(data_dir + "efc0_curves.parquet")
-efc50 = pd.read_parquet(data_dir + "efc50_curves.parquet")
+
+efc0 = pd.read_parquet(data_dir + "public_charging_curve_early.parquet")
+efc50 = pd.read_parquet(data_dir + "public_charging_curve_late.parquet")
 metadata = pd.read_csv(data_dir + "public_cell_metadata_all.csv")
 
 
