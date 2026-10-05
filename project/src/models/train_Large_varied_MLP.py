@@ -49,7 +49,7 @@ args = parser.parse_args()
 torch.manual_seed(args.seed)
 np.random.seed(args.seed)
 
-num_dim = 11
+num_dim = 9
 
 
 # ------------------------------------------------------------------------
@@ -61,26 +61,28 @@ all_prior_max = []
 parameter_names = None
 
 print("Loading parameter bounds:")
-
 for chemistry, config in CHEMISTRY_CONFIG.items():
 
     params_module = importlib.import_module(config["params_module"])
     params_log = params_module.params_log
 
+    # Only the first 9 parameters are SBI/MLP targets
+    current_parameter_names = list(params_log.keys())[:num_dim]
+
     if parameter_names is None:
-        parameter_names = list(params_log.keys())
-    elif list(params_log.keys()) != parameter_names:
+        parameter_names = current_parameter_names
+    elif current_parameter_names != parameter_names:
         raise ValueError(
             f"Parameter ordering for {chemistry} does not match the other chemistries."
         )
 
     chemistry_min = torch.tensor(
-        [bounds[0] for bounds in params_log.values()],
+        [bounds[0] for bounds in list(params_log.values())[:num_dim]],
         dtype=torch.float32,
     )
 
     chemistry_max = torch.tensor(
-        [bounds[1] for bounds in params_log.values()],
+        [bounds[1] for bounds in list(params_log.values())[:num_dim]],
         dtype=torch.float32,
     )
 
@@ -122,7 +124,7 @@ def denormalize_theta(theta_normalized):
 dataset_dir = (
     Path(__file__).resolve().parents[2]
     / "models"
-    / "Full_simulations"
+    / "Varied_simulations"
 )
 
 theta_list = []
@@ -187,14 +189,24 @@ for chemistry in CHEMISTRY_CONFIG:
 theta = torch.cat(theta_list, dim=0)
 x = torch.cat(x_list, dim=0)
 
+
+
 assert torch.isfinite(theta).all()
 assert torch.isfinite(x).all()
+
+if theta.shape[1] != 9 or x.shape[1] != 108:
+    raise ValueError(
+        f"{chemistry}: expected theta [N,9] and x [N,108], "
+        f"got {tuple(theta.shape)} and {tuple(x.shape)}"
+    )
 
 print("\nCombined dataset:")
 print("theta:", theta.shape)
 print("x:    ", x.shape)
 
 x_dim = x.shape[1]
+if x_dim != 108:
+    raise ValueError(f"Expected x dimension 108, got {x_dim}")
 theta_dim = theta.shape[1]
 
 if theta_dim != len(prior_min):
@@ -311,6 +323,13 @@ train_idx = perm[n_val:]
 theta_train, x_train = theta_normalized[train_idx].to(device), x[train_idx].to(device)
 theta_val, x_val = theta_normalized[val_idx].to(device), x[val_idx].to(device)
 
+x_mean = x[train_idx].mean(dim=0)
+x_std = x[train_idx].std(dim=0)
+x_std = torch.clamp(x_std, min=1e-6)
+
+x_train = (x[train_idx] - x_mean) / x_std
+x_val = (x[val_idx] - x_mean) / x_std
+
 train_dataset = torch.utils.data.TensorDataset(x_train, theta_train)
 train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
@@ -398,8 +417,10 @@ if __name__ == "__main__":
             "prior_min": prior_min,
             "prior_max": prior_max,
             "parameter_names": parameter_names,
+            "x_mean": x_mean,
+            "x_std": x_std,
         },
-        output_dir / "mlp_combined.pt",
+        output_dir / "mlp_varied_combined.pt",
     )
 
     fig, ax = plt.subplots(figsize=(10, 4))
