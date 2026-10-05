@@ -45,10 +45,10 @@ from parsers import (
     parse_samsung25r, parse_samsung25r_filename, parse_snl_voltage_timeseries, parse_snl_cycle_summary
 )
 from process_cell import process_cell
-from config_and_cleaning import apply_three_step_cleaning, build_cell_record, calculate_efc, NOMINAL_CAPACITY_AH
+from config_and_cleaning import apply_three_step_cleaning, build_cell_record, calculate_efc, find_capacity_checks, NOMINAL_CAPACITY_AH
 
 DATA_ROOT = Path(f"/work3/claho/battery_datasets")
-OUTPUT_DIR = Path(f"/work3/claho/battery_datasets/processed")
+OUTPUT_DIR = Path(f"/work3/claho/battery_datasets/processed_test_2")
 
 EFC_EARLY = 1
 EFC_LATE = 50
@@ -72,7 +72,7 @@ def main():
     errors = []
 
     # --- Sony-VTC6 (CMU) ---
-    """
+    
     vtc6_dir = DATA_ROOT / "sony_vtc6"
     vtc6_files = [f for f in vtc6_dir.glob("**/*.csv") if "impedance" not in f.name.lower()]
     print(f"[cmu] found {len(vtc6_files)} files")
@@ -88,6 +88,7 @@ def main():
             errors.append((cell_id, "cmu", str(e), traceback.format_exc()))
 
     # --- Sony-VTC5A (TUM), cyclic/dynamic only ---
+
     tum_dir = DATA_ROOT / "sony_vtc5a"
     tum_files = [f for f in tum_dir.glob("**/*.mat") if "calendar" not in str(f).lower()]
     print(f"[tum] found {len(tum_files)} cyclic/dynamic files")
@@ -101,7 +102,7 @@ def main():
             add_charging_curves(efc0, efc50, cell_id, charging_early_frames, charging_late_frames)
         except Exception as e:
             errors.append((cell_id, "tum", str(e), traceback.format_exc()))
-
+  
     # --- LG-MJ1 (4TU) - still needs temp_C_nameplate per file, see build_dataset.py ---
     elt_dir = DATA_ROOT / "lg_mj1"
     elt_files = list(elt_dir.glob("**/*.csv"))
@@ -113,12 +114,15 @@ def main():
             temp_C, chrg_c, dchrg_c = parse_lgmj1_filename(f)
             df = parse_lgmj1(f)
             df["temp_C"] = temp_C
-            meta, efc0, efc50 = process_cell(df, cell_id, "elt", efc_early=EFC_EARLY, efc_late=EFC_LATE, charge_c_rate_override = chrg_c, discharge_c_rate_override= dchrg_c)
+            if chrg_c == None:
+                meta, efc0, efc50 = process_cell(df, cell_id, "elt", efc_early=EFC_EARLY, efc_late=EFC_LATE)
+            else:
+                meta, efc0, efc50 = process_cell(df, cell_id, "elt", efc_early=EFC_EARLY, efc_late=EFC_LATE, charge_c_rate_override = chrg_c, discharge_c_rate_override= dchrg_c)
             metadata_rows.append(meta)
             add_charging_curves(efc0, efc50, cell_id, charging_early_frames, charging_late_frames)
         except Exception as e:
             errors.append((cell_id, "elt", str(e), traceback.format_exc()))
-    
+   
     # --- Samsung-25R (Zhu et al.) ---
     tongji_dir = DATA_ROOT / "samsung_25r"
     tongji_files = list(tongji_dir.glob("**/*.csv"))
@@ -135,42 +139,55 @@ def main():
             add_charging_curves(efc0, efc50, cell_id, charging_early_frames, charging_late_frames)
         except Exception as e:
             errors.append((cell_id, "tongji", str(e), traceback.format_exc()))
-    """
+
     # --- Sandia SNL (LFP/NMC) - voltage-only, no current column ---
+    MAX_CYCLE = {20: 300, 60: 100, 100: 70}
     snl_dir = DATA_ROOT / "sandia_snl" 
     snl_files = [f for f in snl_dir.glob("**/*.csv") if "all" not in str(f).lower()]
-    snl_meta_data = parse_snl_cycle_summary(snl_dir/"query26_summary.csv")
-  
+    snl_meta_data = parse_snl_cycle_summary(snl_dir/"query26_summary_all_cells.csv")
+    print(f"[snl] found {len(snl_files)}")
 
     for f in snl_files:
-        print(f"[snl] found {f.name.lower()}")
+        print(f"file name = {f}")
+        
         try:
             snl_cells = parse_snl_voltage_timeseries(f)
             
             for cell_id, info in snl_cells.items():
+                
+                diff = info["dod_high_pct"] - info["dod_low_pct"]
+                max_cycle = MAX_CYCLE[diff]
                 # Compute SOH from capacity test cycles
-                info["discharge_capacity_Ah"] = snl_meta_data[cell_id]["ah_d"]
-                checks, cell_processed = find_capacity_checks(snl_meta_data[cell_id])
+                info["discharge_capacity_Ah"] = snl_meta_data[cell_id]["discharge_capacity_Ah"].iloc[:max_cycle]
+
+               
+                nom_cap = NOMINAL_CAPACITY_AH[info["source_dataset"]]
+    
+                if info["dod_low_pct"]==0:
+                    checks, cell_processed = find_capacity_checks(snl_meta_data[cell_id], nominal_capacity_Ah=nom_cap, min_fraction_of_nominal=1.5, outlier_fraction_of_nominal=2.5)
+                else:
+                    checks, cell_processed = find_capacity_checks(snl_meta_data[cell_id], nominal_capacity_Ah=nom_cap)
 
                 Q_ref = checks["capacity_Ah"].iloc[0]
                 checks["SOH_pct"] = checks["capacity_Ah"] / Q_ref * 100
+                #print(checks)
 
                 # Find first cycle below 90% SOH to compute cycle life
                 first_90_cycle = next(
                     (
-                        cycle
+                        int(checks["first_cycle"].iloc[cycle])
                         for cycle, soh in checks["SOH_pct"].items()
-                        if soh < 90
+                        if soh <= 90
                     ),
                     None,
                 )
-                print(first_90_cycle)
+                print(f"{first_90_cycle=}")
             
                 # Compute EFC
-                info = calculate_efc(info, q_nom = NOMINAL_CAPACITY_AH[info["source_dataset"]], cell_id="snl")
+                info = calculate_efc(info, q_nom = nom_cap, cell_id="snl")
             
                 
-                break
+                
                 full_cell_id = f"{info['source_dataset']}_{cell_id}"
                 metadata_rows.append(build_cell_record(
                     cell_id=full_cell_id,
@@ -181,23 +198,24 @@ def main():
                     cycle_life = first_90_cycle,
                     initial_discharge_capacity_Ah=snl_meta_data[cell_id]["ah_c"].iloc[0],
                 ))
-                
+                efcs = np.asarray(info["EFC"])
+                #print(efcs)
                 for target, frames in [(EFC_EARLY, charging_early_frames), (EFC_LATE, charging_late_frames)]:
-                    efcs = np.asarray(info["EFC"])
+                    
 
                     if target == EFC_LATE:
                         closest = efcs[np.argmin(np.abs(efcs - target))]
 
                         if abs(closest - target) < 0.5:
-
+                            print(f"{closest=}")
                             weight = 1
                             curve = pd.DataFrame({"lower_curve": info["voltage_curves"][closest].copy(), "upper_curve": info["voltage_curves"][closest].copy(), "weight":weight})
                    
                         else:
                             lower = efcs[efcs < target].max() if np.any(efcs < target) else None
                             upper = efcs[efcs > target].min() if np.any(efcs > target) else None
-                            print(lower)
-                            print(upper)
+                            print(f"{lower=}")
+                            print(f"{upper=}")
                             weight = (target - lower) / (upper - lower)
                             curve = pd.DataFrame({"lower_curve": info["voltage_curves"][lower].copy(), "upper_curve": info["voltage_curves"][upper].copy(), "weight":weight})
                             curve["cell_id"] = full_cell_id
@@ -214,7 +232,7 @@ def main():
         except Exception as e:
             errors.append((cell_id, "snl", str(e), traceback.format_exc()))
 
-
+   
     # --- assemble + clean + save ---
     if not metadata_rows:
         print("\nNo cells were successfully parsed.")
@@ -237,6 +255,7 @@ def main():
                 print(f"{name} -> {OUTPUT_DIR / f'public_{name}.parquet'}")
             else:
                 print(f"No surviving cell had data for {name}.")
+
 
     if errors:
         pd.DataFrame(errors, columns=["cell_id", "source_dataset", "error", "traceback"]).to_csv(

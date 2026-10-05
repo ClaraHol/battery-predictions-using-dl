@@ -149,7 +149,7 @@ def compute_cc_c_rate(df: pd.DataFrame, nominal_capacity_Ah: float, direction: s
     return float(np.median(per_cycle)) / nominal_capacity_Ah
 
 
-def compute_cycle_life_robust(discharge_capacity_by_cycle: pd.Series,
+def compute_cycle_life_robust(df: pd.DataFrame, discharge_capacity_by_cycle: pd.Series,
                                nominal_capacity_Ah: float,
                                window: int = 5, n_reference: int = 5,
                                min_fraction_of_nominal: float = 0.5) -> dict:
@@ -192,21 +192,22 @@ def calculate_efc(df, q_nom, reset_threshold=0.1, cell_id = None):
     df = df.copy()
     discharge_capacity = df["discharge_capacity_Ah"].astype(float).to_numpy()
 
-    # Difference between consecutive capacity values
-    dQ = np.diff(discharge_capacity, prepend=discharge_capacity[0])
-
-    # A significant negative jump indicates that the
-    # discharge-capacity counter has reset.
-    reset = dQ < -reset_threshold
-
-    # Accumulated capacity before each reset
-    offset = np.zeros(len(df))
-
-    accumulated_capacity = 0.0
+   
     if cell_id=="snl":
-        df["EFC"] = discharge_capacity/q_nom
+        
+        df["EFC"] = discharge_capacity.cumsum()/q_nom
     else:
+        # Difference between consecutive capacity values
+        dQ = np.diff(discharge_capacity, prepend=discharge_capacity[0])
+    
+        # A significant negative jump indicates that the
+        # discharge-capacity counter has reset.
+        reset = dQ < -reset_threshold
+    
+        # Accumulated capacity before each reset
         offset = np.zeros(len(df))
+    
+        accumulated_capacity = 0.0
         for i in range(len(df)):
             if reset[i]:
                 accumulated_capacity += discharge_capacity[i - 1]
@@ -244,7 +245,67 @@ def build_cell_record(
     }
 
 
-def find_capacity_checks(cell_df, min_jump_ratio=1.15):
+def find_capacity_checks(cell_df: pd.DataFrame, nominal_capacity_Ah: float,
+                          min_fraction_of_nominal: float = 0.8,
+                          outlier_fraction_of_nominal: float = 1.2) -> tuple:
+    """
+    cell_df: must contain cycle_number, discharge_capacity_Ah
+    nominal_capacity_Ah: from config_and_cleaning.NOMINAL_CAPACITY_AH,
+        keyed by chemistry (snl_lfp=1.1, snl_nca=3.2, snl_nmc=3.0)
+    min_fraction_of_nominal: a cycle counts as a capacity-check candidate
+        if ah_d >= this * nominal. Default 0.75 gives margin down to deep
+        end-of-life (the paper's own stopping criterion is 80% of INITIAL
+        capacity, close to but not identical to nominal) while staying
+        far above the ~0.5x-nominal DOD-restricted normal-cycling baseline
+        seen in real data, so there's no risk of normal cycling leaking in.
+    outlier_fraction_of_nominal: within a detected block, any row whose
+        ah_d exceeds this * nominal is physically implausible as a single-
+        cycle discharge reading (confirmed: 1.45 Ah on a 1.1 Ah nominal
+        cell) and is excluded from the reported capacity, not averaged in.
+ 
+    Returns (checks, df):
+      checks: one row per block - capacity_check_id, first_cycle,
+              last_cycle, n_cycles, capacity_Ah, n_outliers_excluded
+      df: original data with capacity_check / capacity_check_id columns added
+    """
+    df = cell_df.sort_values("cycle_number").reset_index(drop=True).copy()
+ 
+    is_candidate = df["discharge_capacity_Ah"] >= min_fraction_of_nominal * nominal_capacity_Ah
+ 
+    # new block whenever we leave a candidate run OR cycle_index isn't
+    # contiguous (a gap in the data shouldn't silently merge two blocks)
+    block_break = (~is_candidate) | (df["cycle_number"].diff() != 1)
+    block_id_raw = block_break.cumsum()
+ 
+    df["capacity_check"] = is_candidate
+    df["capacity_check_id"] = np.where(is_candidate, block_id_raw, np.nan)
+ 
+    def _agg(g):
+        non_outlier = g[g["discharge_capacity_Ah"] <= outlier_fraction_of_nominal * nominal_capacity_Ah]
+        capacity = non_outlier["discharge_capacity_Ah"].max() if len(non_outlier) else g["discharge_capacity_Ah"].median()
+        return pd.Series({
+            "first_cycle": g["cycle_number"].min(),
+            "last_cycle": g["cycle_number"].max(),
+            "n_cycles": len(g),
+            "capacity_Ah": capacity,
+            "n_outliers_excluded": len(g) - len(non_outlier),
+        })
+ 
+    checks = (
+        df[df["capacity_check"]]
+        .groupby("capacity_check_id")
+        .apply(_agg, include_groups=False)
+        .reset_index()
+        .rename(columns={"capacity_check_id": "capacity_check_id"})
+    )
+    checks["capacity_check_id"] = range(len(checks))  # renumber 0..N contiguously
+    # re-sync the id back onto df to match the renumbering above
+    id_map = dict(zip(sorted(df["capacity_check_id"].dropna().unique()), checks["capacity_check_id"]))
+    df["capacity_check_id"] = df["capacity_check_id"].map(id_map)
+ 
+    return checks, df
+
+def find_capacity_checks_old(cell_df, min_jump_ratio=1.15):
     """
     Identify the 3-cycle capacity-check blocks in one cell.
 
@@ -324,6 +385,8 @@ def find_capacity_checks(cell_df, min_jump_ratio=1.15):
     )
 
     return checks, df
+
+
 
 
 def apply_three_step_cleaning(

@@ -37,6 +37,7 @@ import time
 from pathlib import Path
 
 import requests
+from parsers import parse_snl_cell_id
 
 # ===========================================================================
 # Configuration - point this at your scratch filesystem.
@@ -205,7 +206,7 @@ PUBLIC_KEY = "Key 61PzyYn9u56njtPDOh37VVBFasGusUlxc7WZ1FSj"
 
 PROGRESS_FILE = Path("battery_data/progress.csv")
 
-MAX_CYCLE = 100
+MAX_CYCLE = {20: 300, 60: 100, 100: 70}
 BLOCK_SIZE = 3
 
 MAX_RETRIES = 5
@@ -500,7 +501,12 @@ def download_q_26(summary_file:str):
 def fetch_sandia_snl():
 
     dest_dir = DEST_ROOT / "sandia_snl"
-    download_q_26(summary_file = dest_dir / "query26_summary.csv")
+    p = dest_dir / "query26_summary_all_cells.csv"
+    if p.is_file():
+        print("Meta data is all ready downloaded" )
+    else:
+        download_q_26(summary_file = dest_dir / "query26_summary.csv")
+    
     progress = load_progress()
 
     for i, cell_id in enumerate(CELL_IDS, start=1):
@@ -512,8 +518,11 @@ def fetch_sandia_snl():
         # ----------------------------------------------------
         # Check whether this cell was already completed
         # ----------------------------------------------------
-
-        if cell_id in progress and progress[cell_id]["status"] == "complete":
+        _, _, dod_low, dod_high, _, _, _ = parse_snl_cell_id(cell_id)
+        diff = dod_high - dod_low
+        max_cycle = MAX_CYCLE[diff]
+        print(f"{diff=}, {max_cycle=}")
+        if cell_id in progress and progress[cell_id]["status"] == "complete" and progress[cell_id]["last_cycle"] > max_cycle + 1:
             print("    Already complete. Skipping.")
             continue
 
@@ -570,8 +579,9 @@ def fetch_sandia_snl():
             # ------------------------------------------------
             # Cycle loop
             # ------------------------------------------------
-
-            for j in range(start_cycle, MAX_CYCLE + 1, BLOCK_SIZE):
+           
+      
+            for j in range(start_cycle, max_cycle + 1, BLOCK_SIZE):
                 cycle_1 = j
                 cycle_2 = j + 1
                 cycle_3 = j + 2
@@ -660,7 +670,7 @@ def fetch_sandia_snl():
                 # Checkpoint
                 # --------------------------------------------
 
-                last_cycle_this_block = min(j + BLOCK_SIZE - 1, MAX_CYCLE)
+                last_cycle_this_block = min(j + BLOCK_SIZE - 1, max_cycle)
 
                 progress[cell_id] = {
                     "last_cycle": last_cycle_this_block,
@@ -676,14 +686,14 @@ def fetch_sandia_snl():
                 time.sleep(0.5)
 
             else:
-                # The for loop reached MAX_CYCLE
+                # The for loop reached max_cycle
                 # without breaking.
 
-                progress[cell_id] = {"last_cycle": MAX_CYCLE, "status": "complete"}
+                progress[cell_id] = {"last_cycle": max_cycle, "status": "complete"}
 
                 save_progress(progress)
 
-                print(f"    Finished all cycles through {MAX_CYCLE}")
+                print(f"    Finished all cycles through {max_cycle}")
 
     print()
     print("=" * 80)
@@ -713,8 +723,8 @@ if __name__ == "__main__":
         DATASETS[name]()
         print()
 
-    print("Done. Contents of", DEST_ROOT, ":")
+    #print("Done. Contents of", DEST_ROOT, ":")
 
-    for p in sorted(DEST_ROOT.rglob("*")):
-        if p.is_file():
-            print(" ", p.relative_to(DEST_ROOT), f"({p.stat().st_size / 1e6:.1f} MB)")
+    #for p in sorted(DEST_ROOT.rglob("*")):
+    #    if p.is_file():
+    #        print(" ", p.relative_to(DEST_ROOT), f"({p.stat().st_size / 1e6:.1f} MB)")
