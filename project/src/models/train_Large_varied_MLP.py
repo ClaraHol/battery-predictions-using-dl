@@ -35,110 +35,198 @@ CHEMISTRY_CONFIG = {
     "VTC5A": {"params_module": "src.simulation.parameters.parameter_VTC5A"},
     "VTC6": {"params_module": "src.simulation.parameters.parameter_VTC6"},
 }
-
 parser = argparse.ArgumentParser()
-parser.add_argument("--chemistry", required=True, choices=CHEMISTRY_CONFIG.keys())
 parser.add_argument("--max-epochs", type=int, default=1000)
-parser.add_argument("--patience", type=int, default=30, help="Early stopping patience (epochs with no val improvement)")
+parser.add_argument(
+    "--patience",
+    type=int,
+    default=30,
+    help="Early stopping patience (epochs with no val improvement)",
+)
 parser.add_argument("--seed", type=int, default=0)
 args = parser.parse_args()
 
 torch.manual_seed(args.seed)
 np.random.seed(args.seed)
 
-print("Chemistry used:", args.chemistry)
+num_dim = 9
+
 
 # ------------------------------------------------------------------------
-# 1. Rebuild the parameter priors used by SBI.
-#    The MLP is trained on parameters scaled to [0, 1] according to these
-#    prior bounds. Consequently, an MSE of the same size in any parameter
-#    corresponds to the same fraction of that parameter's prior range.
+# 1. Build combined parameter bounds across ALL chemistries
 # ------------------------------------------------------------------------
-params_module = importlib.import_module(CHEMISTRY_CONFIG[args.chemistry]["params_module"])
-params_log = params_module.params_log
 
-prior_min = torch.tensor(
-    [bounds[0] for bounds in params_log.values()], dtype=torch.float32
-)
-prior_max = torch.tensor(
-    [bounds[1] for bounds in params_log.values()], dtype=torch.float32
-)
+all_prior_min = []
+all_prior_max = []
+parameter_names = None
+
+print("Loading parameter bounds:")
+for chemistry, config in CHEMISTRY_CONFIG.items():
+
+    params_module = importlib.import_module(config["params_module"])
+    params_log = params_module.params_log
+
+    # Only the first 9 parameters are SBI/MLP targets
+    current_parameter_names = list(params_log.keys())[:num_dim]
+
+    if parameter_names is None:
+        parameter_names = current_parameter_names
+    elif current_parameter_names != parameter_names:
+        raise ValueError(
+            f"Parameter ordering for {chemistry} does not match the other chemistries."
+        )
+
+    chemistry_min = torch.tensor(
+        [bounds[0] for bounds in list(params_log.values())[:num_dim]],
+        dtype=torch.float32,
+    )
+
+    chemistry_max = torch.tensor(
+        [bounds[1] for bounds in list(params_log.values())[:num_dim]],
+        dtype=torch.float32,
+    )
+
+    all_prior_min.append(chemistry_min)
+    all_prior_max.append(chemistry_max)
+
+
+all_prior_min = torch.stack(all_prior_min)
+all_prior_max = torch.stack(all_prior_max)
+
+# Bounding box covering the parameter ranges of every chemistry
+prior_min = all_prior_min.min(dim=0).values
+prior_max = all_prior_max.max(dim=0).values
+
 prior_range = prior_max - prior_min
 
 if torch.any(prior_range <= 0):
-    raise ValueError("Every prior must have upper bound > lower bound.")
+    raise ValueError("Every combined prior must have upper bound > lower bound.")
+
+
+print("\nCombined parameter bounds:")
+
+for name, low, high in zip(parameter_names, prior_min, prior_max):
+    print(f"{name:20s}: [{low:.6g}, {high:.6g}]")
+
 
 def normalize_theta(theta):
     return (theta - prior_min) / prior_range
 
+
 def denormalize_theta(theta_normalized):
     return theta_normalized * prior_range + prior_min
 
+
 # ------------------------------------------------------------------------
-# 2. Load the same simulated dataset used to train the spline-flow model
+# 2. Load ALL simulated datasets
 # ------------------------------------------------------------------------
-dataset_path = (
+
+dataset_dir = (
     Path(__file__).resolve().parents[2]
     / "models"
-    / "Full_simulations"
-    / f"dataset_{args.chemistry}.pt"
+    / "Varied_simulations"
 )
-if not dataset_path.exists():
-    raise FileNotFoundError(
-        f"No dataset found at {dataset_path}. Run the simulation script for "
-        f"--chemistry {args.chemistry} first."
+
+theta_list = []
+x_list = []
+
+print("\nLoading datasets:")
+
+for chemistry in CHEMISTRY_CONFIG:
+
+    dataset_path = dataset_dir / f"dataset_{chemistry}.pt"
+
+    if not dataset_path.exists():
+        raise FileNotFoundError(
+            f"No dataset found for {chemistry} at {dataset_path}"
+        )
+
+    theta, x = torch.load(dataset_path)
+
+    theta = theta.float()
+    x = x.float()
+
+    print(
+        f"\n{chemistry}: "
+        f"theta {tuple(theta.shape)}, "
+        f"x {tuple(x.shape)}"
     )
 
-theta, x = torch.load(dataset_path)
-theta = theta.float()
-x = x.float()
-print(f"Loaded dataset: theta {theta.shape}, x {x.shape} from {dataset_path}")
+    # ------------------------------------------------------------
+    # Remove NaN/Inf simulations from THIS chemistry
+    # ------------------------------------------------------------
+
+    valid_mask = (
+        torch.isfinite(x).all(dim=1)
+        & torch.isfinite(theta).all(dim=1)
+    )
+
+    n_total = len(valid_mask)
+    n_valid = valid_mask.sum().item()
+    n_invalid = n_total - n_valid
+
+    print(
+        f"  Valid:   {n_valid}/{n_total} "
+        f"({100 * n_valid / n_total:.2f}%)"
+    )
+
+    print(
+        f"  Removed: {n_invalid}/{n_total} "
+        f"({100 * n_invalid / n_total:.2f}%)"
+    )
+
+    theta = theta[valid_mask]
+    x = x[valid_mask]
+
+    theta_list.append(theta)
+    x_list.append(x)
+
 
 # ------------------------------------------------------------------------
-# Remove simulations containing NaN or Inf
+# 3. Combine all chemistries
 # ------------------------------------------------------------------------
 
-# A simulation is valid only if ALL values in both x and theta are finite.
-valid_mask = (
-    torch.isfinite(x).all(dim=1)
-    & torch.isfinite(theta).all(dim=1)
-)
+theta = torch.cat(theta_list, dim=0)
+x = torch.cat(x_list, dim=0)
 
-n_total = len(valid_mask)
-n_valid = valid_mask.sum().item()
-n_invalid = n_total - n_valid
 
-print(
-    f"Valid simulations: {n_valid}/{n_total} "
-    f"({100 * n_valid / n_total:.2f}%)"
-)
-print(
-    f"Removed invalid simulations: {n_invalid}/{n_total} "
-    f"({100 * n_invalid / n_total:.2f}%)"
-)
 
-x = x[valid_mask]
-theta = theta[valid_mask]
-
-# Safety check
-assert torch.isfinite(x).all()
 assert torch.isfinite(theta).all()
+assert torch.isfinite(x).all()
 
-print(f"Dataset after filtering: theta {theta.shape}, x {x.shape}")
+if theta.shape[1] != 9 or x.shape[1] != 108:
+    raise ValueError(
+        f"{chemistry}: expected theta [N,9] and x [N,108], "
+        f"got {tuple(theta.shape)} and {tuple(x.shape)}"
+    )
+
+print("\nCombined dataset:")
+print("theta:", theta.shape)
+print("x:    ", x.shape)
 
 x_dim = x.shape[1]
+if x_dim != 108:
+    raise ValueError(f"Expected x dimension 108, got {x_dim}")
 theta_dim = theta.shape[1]
 
 if theta_dim != len(prior_min):
     raise ValueError(
-        f"Dataset has {theta_dim} target parameters, but {args.chemistry} "
-        f"defines {len(prior_min)} priors."
+        f"Dataset has {theta_dim} target parameters, "
+        f"but {len(prior_min)} parameter bounds were defined."
     )
 
-# Normalize targets using the prior support, not dataset statistics.
-# This makes all target dimensions contribute equally to the MSE.
+
+# ------------------------------------------------------------------------
+# 4. Normalize all targets using the SAME combined parameter bounds
+# ------------------------------------------------------------------------
+
 theta_normalized = normalize_theta(theta)
-print("Normalized theta using prior bounds (each target maps to prior range [0, 1]).")
+
+print(
+    "\nNormalized theta using combined bounds "
+    "(each target maps to the global parameter range [0, 1])."
+)
+
 
 # ------------------------------------------------------------------------
 # 3. Hyper-parameters, matched to the spline-flow's internal conditioner
@@ -150,10 +238,10 @@ dropout = 0.2
 use_batch_norm = True
 
 max_num_epochs = args.max_epochs
-batch_size = 256*4
+batch_size = 256*8
 lr = 1*1e-4
 clip = 21.0
-validation_fraction = 0.1
+validation_fraction = 0.2
 
 
 # ------------------------------------------------------------------------
@@ -235,6 +323,13 @@ train_idx = perm[n_val:]
 theta_train, x_train = theta_normalized[train_idx].to(device), x[train_idx].to(device)
 theta_val, x_val = theta_normalized[val_idx].to(device), x[val_idx].to(device)
 
+x_mean = x[train_idx].mean(dim=0)
+x_std = x[train_idx].std(dim=0)
+x_std = torch.clamp(x_std, min=1e-6)
+
+x_train = (x[train_idx] - x_mean) / x_std
+x_val = (x[val_idx] - x_mean) / x_std
+
 train_dataset = torch.utils.data.TensorDataset(x_train, theta_train)
 train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
@@ -246,11 +341,17 @@ scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
     optimizer,
     mode="min",
     factor=0.8,      # multiply LR by 0.5
-    patience=3,      # wait 5 epochs without improvement
+    patience=3,      # wait 3 epochs without improvement
     min_lr=1e-8,
 )
 
-output_dir = Path(__file__).resolve().parents[2] / "models" / "MLP_models" / args.chemistry
+output_dir = (
+    Path(__file__).resolve().parents[2]
+    / "models"
+    / "MLP_models"
+    / "Combined"
+)
+
 output_dir.mkdir(parents=True, exist_ok=True)
 
 if __name__ == "__main__":
@@ -315,9 +416,11 @@ if __name__ == "__main__":
             "model_state_dict": model.state_dict(),
             "prior_min": prior_min,
             "prior_max": prior_max,
-            "parameter_names": list(params_log.keys()),
+            "parameter_names": parameter_names,
+            "x_mean": x_mean,
+            "x_std": x_std,
         },
-        output_dir / f"mlp_{args.chemistry}.pt",
+        output_dir / "mlp_varied_combined.pt",
     )
 
     fig, ax = plt.subplots(figsize=(10, 4))
@@ -325,8 +428,12 @@ if __name__ == "__main__":
     ax.plot(val_losses, label="validation_loss")
     ax.set_xlabel("epoch")
     ax.set_ylabel("MSE loss (prior-normalized parameters)")
-    ax.set_title(f"MLP training summary: {args.chemistry}")
+    ax.set_title(f"MLP training summary: s")
     ax.legend()
-    fig.savefig(output_dir / f"mlp_training_summary_{args.chemistry}.png", dpi=150, bbox_inches="tight")
+    fig.savefig(
+        output_dir / "mlp_training_summary_combined.png",
+        dpi=150,
+        bbox_inches="tight",
+    )
 
     print(f"Saved model and training summary to {output_dir}")
