@@ -215,6 +215,25 @@ MAX_POLL_ATTEMPTS = 60
 # All 25 cells
 CELL_IDS = [
     # LFP
+    "SNL_18650_LFP_15C_0-100_0.5/2C_a",
+    "SNL_18650_LFP_15C_0-100_0.5/2C_b",
+    "SNL_18650_LFP_25C_0-100_0.5/0.5C_a",
+    "SNL_18650_LFP_25C_0-100_0.5/1C_a",
+    "SNL_18650_LFP_25C_0-100_0.5/1C_b",
+    "SNL_18650_LFP_25C_0-100_0.5/1C_c",
+    "SNL_18650_LFP_25C_0-100_0.5/1C_d",
+    "SNL_18650_LFP_25C_0-100_0.5/2C_a",
+    "SNL_18650_LFP_25C_0-100_0.5/2C_b",
+    "SNL_18650_LFP_25C_0-100_0.5/3C_a",
+    "SNL_18650_LFP_25C_0-100_0.5/3C_b",
+    "SNL_18650_LFP_25C_0-100_0.5/3C_c",
+    "SNL_18650_LFP_25C_0-100_0.5/3C_d",
+    "SNL_18650_LFP_35C_0-100_0.5/1C_a",
+    "SNL_18650_LFP_35C_0-100_0.5/1C_b",
+    "SNL_18650_LFP_35C_0-100_0.5/1C_c",
+    "SNL_18650_LFP_35C_0-100_0.5/1C_d",
+    "SNL_18650_LFP_35C_0-100_0.5/2C_a",
+    "SNL_18650_LFP_35C_0-100_0.5/2C_b",
     "SNL_18650_LFP_25C_20-80_0.5/0.5C_a",
     "SNL_18650_LFP_25C_20-80_0.5/0.5C_b",
     "SNL_18650_LFP_25C_20-80_0.5/0.5C_c",
@@ -231,7 +250,29 @@ CELL_IDS = [
     # "SNL_18650_NCA_25C_20-80_0.5/0.5C_d",
     # "SNL_18650_NCA_25C_40-60_0.5/0.5C_a",
     # "SNL_18650_NCA_25C_40-60_0.5/0.5C_b",
-    # # NMC
+
+    # NMC
+    "SNL_18650_NMC_15C_0-100_0.5/1C_a",
+    "SNL_18650_NMC_15C_0-100_0.5/1C_b",
+    "SNL_18650_NMC_15C_0-100_0.5/2C_a",
+    "SNL_18650_NMC_15C_0-100_0.5/2C_b",
+    "SNL_18650_NMC_25C_0-100_0.5/0.5C_b",
+    "SNL_18650_NMC_25C_0-100_0.5/1C_a",
+    "SNL_18650_NMC_25C_0-100_0.5/1C_b",
+    "SNL_18650_NMC_25C_0-100_0.5/1C_c",
+    "SNL_18650_NMC_25C_0-100_0.5/1C_d",
+    "SNL_18650_NMC_25C_0-100_0.5/2C_a",
+    "SNL_18650_NMC_25C_0-100_0.5/2C_b",
+    "SNL_18650_NMC_25C_0-100_0.5/3C_a",
+    "SNL_18650_NMC_25C_0-100_0.5/3C_b",
+    "SNL_18650_NMC_25C_0-100_0.5/3C_c",
+    "SNL_18650_NMC_25C_0-100_0.5/3C_d",
+    "SNL_18650_NMC_35C_0-100_0.5/1C_a",
+    "SNL_18650_NMC_35C_0-100_0.5/1C_b",
+    "SNL_18650_NMC_35C_0-100_0.5/1C_c",
+    "SNL_18650_NMC_35C_0-100_0.5/1C_d",
+    "SNL_18650_NMC_35C_0-100_0.5/2C_a",
+    "SNL_18650_NMC_35C_0-100_0.5/2C_b",
     "SNL_18650_NMC_25C_20-80_0.5/0.5C_a",
     "SNL_18650_NMC_25C_20-80_0.5/0.5C_b",
     "SNL_18650_NMC_25C_20-80_0.5/0.5C_c",
@@ -405,10 +446,61 @@ def save_progress(progress):
 # Main downloader for Sandia SNL
 # ============================================================
 
+# --------------------------------------------------
+# DOWNLOAD QUERY 26
+#--------------------------------------------------
+
+def download_q_26(summary_file:str):
+   
+
+    summary_columns = [
+        "cell_id",
+        "series",
+        "cycle_index",
+        "test_time",
+        "value",
+    ]
+
+    with open(summary_file, "w", newline="", encoding="utf-8") as f:
+
+        writer = csv.DictWriter(
+            f,
+            fieldnames=summary_columns
+        )
+
+        writer.writeheader()
+
+        for i, cell_id in enumerate(CELL_IDS, start=1):
+
+            print(f"[{i}/{len(CELL_IDS)}] Query 26: {cell_id}")
+
+            data = run_query(
+                query_id=26,
+                parameters={
+                    "cell_id": [cell_id]
+                }
+            )
+
+            rows = data["rows"]
+
+            for row in rows:
+                writer.writerow({
+                    "cell_id": cell_id,
+                    "series": row.get("series"),
+                    "cycle_index": row.get("cycle_index"),
+                    "test_time": row.get("test_time"),
+                    "value": row.get("value"),
+                })
+
+            print(f"    {len(rows):,} rows")
+
+
+    print(f"\nSaved: {summary_file}")
 
 def fetch_sandia_snl():
 
     dest_dir = DEST_ROOT / "sandia_snl"
+    download_q_26(summary_file = dest_dir / "query26_summary.csv")
     progress = load_progress()
 
     for i, cell_id in enumerate(CELL_IDS, start=1):

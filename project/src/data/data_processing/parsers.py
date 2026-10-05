@@ -31,18 +31,12 @@ NEEDS INPUT (can't be inferred from the files alone):
 """
 
 import re
-
 import numpy as np
 import pandas as pd
 
 STANDARD_COLUMNS = [
-    "time_s",
-    "voltage_V",
-    "current_A",
-    "temp_C",
-    "cycle_number",
-    "charge_capacity_Ah",
-    "discharge_capacity_Ah",
+    "time_s", "voltage_V", "current_A", "temp_C",
+    "cycle_number", "charge_capacity_Ah", "discharge_capacity_Ah",
 ]
 
 
@@ -51,17 +45,15 @@ STANDARD_COLUMNS = [
 # ---------------------------------------------------------------------------
 def parse_cmu_vtc6(csv_path: str) -> pd.DataFrame:
     df = pd.read_csv(csv_path)
-    out = pd.DataFrame(
-        {
-            "time_s": df["time_s"],
-            "voltage_V": df["Ecell_V"],
-            "current_A": df["I_mA"] / 1000.0,
-            "temp_C": df["Temperature__C"],
-            "cycle_number": df["cycleNumber"].astype(int),
-            "charge_capacity_Ah": df["QCharge_mA_h"] / 1000.0,
-            "discharge_capacity_Ah": df["QDischarge_mA_h"] / 1000.0,
-        }
-    )
+    out = pd.DataFrame({
+        "time_s": df["time_s"],
+        "voltage_V": df["Ecell_V"],
+        "current_A": df["I_mA"] / 1000.0,
+        "temp_C": df["Temperature__C"],
+        "cycle_number": df["cycleNumber"].astype(int),
+        "charge_capacity_Ah": df["QCharge_mA_h"] / 1000.0,
+        "discharge_capacity_Ah": df["QDischarge_mA_h"] / 1000.0,
+    })
     return out[STANDARD_COLUMNS]
 
 
@@ -78,15 +70,13 @@ def parse_vtc5a_mat(mat_path: str) -> pd.DataFrame:
     # the same length; the low-res setpoint arrays (DateTime, AhChSet, ...)
     # are a different, shorter length and are NOT used here.
     n = len(ds.Time)
-    out = pd.DataFrame(
-        {
-            "time_s": np.asarray(ds.Time, dtype=float),
-            "voltage_V": np.asarray(ds.U, dtype=float),
-            "current_A": np.asarray(ds.I, dtype=float),
-            "temp_C": np.asarray(ds.T1, dtype=float),
-            "cycle_number": np.asarray(ds.CycCount, dtype=int),
-        }
-    )
+    out = pd.DataFrame({
+        "time_s": np.asarray(ds.Time, dtype=float),
+        "voltage_V": np.asarray(ds.U, dtype=float),
+        "current_A": np.asarray(ds.I, dtype=float),
+        "temp_C": np.asarray(ds.T1, dtype=float),
+        "cycle_number": np.asarray(ds.CycCount, dtype=int),
+    })
 
     # Ah is a signed cumulative counter in this dataset (not separate
     # charge/discharge columns) - split by sign of current to reconstruct
@@ -96,12 +86,8 @@ def parse_vtc5a_mat(mat_path: str) -> pd.DataFrame:
     out["charge_capacity_Ah"] = np.where(is_charge, ah, np.nan)
     out["discharge_capacity_Ah"] = np.where(~is_charge, -ah, np.nan)
     # forward-fill within each cycle so both columns are always defined
-    out["charge_capacity_Ah"] = (
-        out.groupby("cycle_number")["charge_capacity_Ah"].ffill().fillna(0.0)
-    )
-    out["discharge_capacity_Ah"] = (
-        out.groupby("cycle_number")["discharge_capacity_Ah"].ffill().fillna(0.0)
-    )
+    out["charge_capacity_Ah"] = out.groupby("cycle_number")["charge_capacity_Ah"].ffill().fillna(0.0)
+    out["discharge_capacity_Ah"] = out.groupby("cycle_number")["discharge_capacity_Ah"].ffill().fillna(0.0)
 
     return out[STANDARD_COLUMNS]
 
@@ -109,7 +95,13 @@ def parse_vtc5a_mat(mat_path: str) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # LG-MJ1 (4TU / VITO) - no native cycle number, no temperature column
 # ---------------------------------------------------------------------------
-def parse_lgmj1(csv_path: str, temp_C_nameplate: float) -> pd.DataFrame:
+def parse_lgmj1_filename(csv_path: str):
+    temp_C = int(re.search(r'T(\d+)', csv_path.name).group(1))
+    chrg_c = float(re.search(r"Ch(\d+(?:\.\d+)?)C", s).group(1))
+    dchrg_c = float(re.search(r"Dch(\d+(?:\.\d+)?)C", s).group(1))
+    return temp_C, chrg_c, dchrg_c
+    
+def parse_lgmj1(csv_path: str) -> pd.DataFrame:
     """
     temp_C_nameplate: REQUIRED. The 4TU dataset was cycled at a fixed 25C or
     45C per cell/folder, but that value isn't in the raw csv - pass it in
@@ -119,6 +111,9 @@ def parse_lgmj1(csv_path: str, temp_C_nameplate: float) -> pd.DataFrame:
     df.columns = [c.strip() for c in df.columns]
     # first column is an unlabeled timestamp column in the sample we saw
     ts_col = df.columns[0]
+   
+   
+
 
     # A new cycle starts wherever Discharge_Capacity_Ah resets back near
     # zero after having been nonzero - i.e. a sharp negative jump, not the
@@ -128,26 +123,22 @@ def parse_lgmj1(csv_path: str, temp_C_nameplate: float) -> pd.DataFrame:
     reset = dcap.diff() < -1e-4
     cycle_number = reset.cumsum()
 
-    out = pd.DataFrame(
-        {
-            "time_s": pd.to_numeric(df["Total_Time_Seconds"], errors="coerce"),
-            "voltage_V": df["Voltage_V"],
-            "current_A": df["Current_A"],
-            "temp_C": temp_C_nameplate,
-            "cycle_number": cycle_number.astype(int),
-            "charge_capacity_Ah": df["Charge_Capacity_Ah"],
-            "discharge_capacity_Ah": df["Discharge_Capacity_Ah"],
-        }
-    )
+    out = pd.DataFrame({
+        "time_s": pd.to_numeric(df["Total_Time_Seconds"], errors="coerce"),
+        "voltage_V": df["Voltage_V"],
+        "current_A": df["Current_A"],
+        "temp_C": np.nan,
+        "cycle_number": cycle_number.astype(int),
+        "charge_capacity_Ah": df["Charge_Capacity_Ah"],
+        "discharge_capacity_Ah": df["Discharge_Capacity_Ah"],
+    })
     return out[STANDARD_COLUMNS]
 
 
 # ---------------------------------------------------------------------------
 # Samsung-25R (Zhu et al. / Zenodo) - condition encoded in filename
 # ---------------------------------------------------------------------------
-FILENAME_RE = re.compile(
-    r"CY(?P<temp>-?\d+)-(?P<charge>[\d_]+)_(?P<discharge>[\d_]+)-#(?P<tag>\d+)"
-)
+FILENAME_RE = re.compile(r"CY(?P<temp>-?\d+)-(?P<charge>[\d_]+)_(?P<discharge>[\d_]+)-#(?P<tag>\d+)")
 
 
 def parse_samsung25r_filename(filename: str):
@@ -160,9 +151,7 @@ def parse_samsung25r_filename(filename: str):
     """
     m = FILENAME_RE.search(filename)
     if not m:
-        raise ValueError(
-            f"Filename '{filename}' doesn't match expected CYX-Y_Z-#N pattern"
-        )
+        raise ValueError(f"Filename '{filename}' doesn't match expected CYX-Y_Z-#N pattern")
     temp_C = float(m.group("temp"))
     charge_c = float(m.group("charge").replace("_", "."))
     discharge_c = float(m.group("discharge").replace("_", "."))
@@ -172,29 +161,28 @@ def parse_samsung25r_filename(filename: str):
 def parse_samsung25r(csv_path: str) -> pd.DataFrame:
     df = pd.read_csv(csv_path)
     df.columns = [c.strip() for c in df.columns]
-    out = pd.DataFrame(
-        {
-            "time_s": df["time/s"],
-            "voltage_V": df["Ecell/V"],
-            "current_A": df["<I>/mA"] / 1000.0,
-            "temp_C": np.nan,  # not logged per-row; comes from filename instead
-            "cycle_number": df["cycle number"].astype(int),
-            "charge_capacity_Ah": df["Q charge/mA.h"] / 1000.0,
-            "discharge_capacity_Ah": df["Q discharge/mA.h"] / 1000.0,
-        }
-    )
+    out = pd.DataFrame({
+        "time_s": df["time/s"],
+        "voltage_V": df["Ecell/V"],
+        "current_A": df["<I>/mA"] / 1000.0,
+        "temp_C": np.nan,  # not logged per-row; comes from filename instead
+        "cycle_number": df["cycle number"].astype(int),
+        "charge_capacity_Ah": df["Q charge/mA.h"] / 1000.0,
+        "discharge_capacity_Ah": df["Q discharge/mA.h"] / 1000.0,
+    })
     return out[STANDARD_COLUMNS]
 
 
 SNL_CELL_ID_RE = re.compile(
-    r"SNL_18650_(?P<chem>LFP|NCA|NMC)_(?P<temp>-?\d+)C_"
+    r"SNL_18650_(?P<chem>LFP|NMC)_(?P<temp>-?\d+)C_"
     r"(?P<dod_low>\d+)-(?P<dod_high>\d+)_"
     r"(?P<charge>[\d.]+)/(?P<discharge>[\d.]+)C_(?P<tag>[a-z]+)"
 )
 
-SNL_CHEM_TO_SOURCE = {"LFP": "snl_lfp", "NCA": "snl_nca", "NMC": "snl_nmc"}
+SNL_CHEM_TO_SOURCE = {"LFP": "snl_lfp", "NMC": "snl_nmc"}
 
-
+ 
+ 
 def parse_snl_cell_id(cell_id: str):
     """
     Decodes 'SNL_18650_LFP_25C_20-80_0.5/0.5C_a' into its components.
@@ -202,9 +190,7 @@ def parse_snl_cell_id(cell_id: str):
     """
     m = SNL_CELL_ID_RE.search(cell_id)
     if not m:
-        raise ValueError(
-            f"cell_id '{cell_id}' doesn't match expected SNL naming pattern"
-        )
+        raise ValueError(f"cell_id '{cell_id}' doesn't match expected SNL naming pattern")
     return (
         SNL_CHEM_TO_SOURCE[m.group("chem")],
         float(m.group("temp")),
@@ -214,29 +200,36 @@ def parse_snl_cell_id(cell_id: str):
         float(m.group("discharge")),
         m.group("tag"),
     )
-
-
+ 
+ 
 def parse_snl_voltage_timeseries(csv_path: str) -> dict:
     """
     Parses the real SNL voltage-only export (columns: cell_id, cycle,
     cycle_time, v, row_m, label, row) covering many cells in one file.
-
+ 
+    CONFIRMED: every cell/cycle in this file is a pure CHARGING curve -
+    monotonically rising voltage (0% decreasing steps checked across
+    multiple cells/cycles), spanning from near the cell chemistry's low
+    voltage bound up to its high one. There's no current column to prove
+    this independently, but the voltage trace itself is unambiguous. This
+    is NOT a mixed charge+discharge+rest cycle.
+ 
     Unlike the other parsers, this does NOT return a single standard-schema
     DataFrame, because this file has no current or capacity data at all -
     current_A/charge_capacity_Ah/discharge_capacity_Ah are meaningless here
     and filling them with NaN would silently break compute_c_rate() and
     compute_cycle_life() if run through process_cell() as-is.
-
+ 
     Returns a dict: {cell_id: {"voltage_curves": {cycle_number: DataFrame},
                                 "temp_C": ..., "charge_c_rate": ...,
                                 "discharge_c_rate": ..., "dod_low_pct": ...,
                                 "dod_high_pct": ..., "source_dataset": ...}}
-
+ 
     charge_c_rate / discharge_c_rate / temp_C come directly from the
     cell_id naming convention (confirmed against Sandia's SNL study
     documentation), NOT computed from data - there's no current column to
     compute them from in this file.
-
+ 
     cycle_life is NOT included - this file has no capacity data, so cycle
     life can't be determined from it alone. A separate capacity/cycle-life
     summary file for these same cells is needed to complete the metadata.
@@ -244,19 +237,16 @@ def parse_snl_voltage_timeseries(csv_path: str) -> dict:
     df = pd.read_csv(csv_path)
     out = {}
     for cell_id, group in df.groupby("cell_id"):
-        source_dataset, temp_C, dod_low, dod_high, charge_c, discharge_c, tag = (
-            parse_snl_cell_id(cell_id)
-        )
+        source_dataset, temp_C, dod_low, dod_high, charge_c, discharge_c, tag = parse_snl_cell_id(cell_id)
         curves = {}
         for cycle_number, cycle_group in group.groupby("cycle"):
-            curves[int(cycle_number)] = pd.DataFrame(
-                {
-                    "time_s": cycle_group["cycle_time"].values,
-                    "voltage_V": cycle_group["v"].values,
-                    "cycle_number": int(cycle_number),
-                    "cell_id": cell_id,
-                }
-            )
+            curves[int(cycle_number)] = pd.DataFrame({
+                "time_s": cycle_group["cycle_time"].values,
+                "voltage_V": cycle_group["v"].values,
+                "cycle_number": int(cycle_number),
+                "cell_id": cell_id,
+            })
+            
         out[cell_id] = {
             "voltage_curves": curves,
             "temp_C": temp_C,
@@ -268,13 +258,26 @@ def parse_snl_voltage_timeseries(csv_path: str) -> dict:
         }
     return out
 
+def pivot_long_to_wide(df: pd.DataFrame, series_col: str, group_cols: list) -> pd.DataFrame:
+    """Pivot a long-format (series, value) table to wide, one column per series prefix."""
+    df = df.copy()
+    # series values look like "ah_c: <cell_id>" -> take the part before ':' as the new column name
+    df["_stat"] = df[series_col].str.split(":", n=1).str[0].str.strip()
+    wide = df.pivot_table(
+        index=group_cols,
+        columns="_stat",
+        values="value",
+        aggfunc="first",
+    ).reset_index()
+    wide.columns.name = None
+    return wide
 
 def parse_snl_cycle_summary(csv_path: str) -> dict:
     """
     Parses the companion capacity-summary export (columns: cell_id,
-    cycle_index, test_time, ah_c, ah_d, e_c, e_d, v_c_mean, v_d_mean,
-    v_max, v_min) - one row per cycle per cell, spanning each cell's full
-    life. This is what feeds config_and_cleaning.compute_snl_cycle_life();
+    cycle_index, test_time, ah_c, ah_d, e_c, e_d) - one row per cycle 
+    per cell, spanning each cell's full life. This is what feeds 
+    config_and_cleaning.compute_snl_cycle_life();
     it does NOT include voltage curves (use parse_snl_voltage_timeseries
     for those).
 
@@ -282,26 +285,21 @@ def parse_snl_cycle_summary(csv_path: str) -> dict:
     actually needed for cycle-life computation are kept.
     """
     df = pd.read_csv(csv_path)
+    df = pivot_long_to_wide(df, series_col="series", group_cols=["cell_id", "cycle_index", "test_time"])
     out = {}
     for cell_id, group in df.groupby("cell_id"):
-        out[cell_id] = (
-            group[["cycle_index", "ah_d"]]
-            .sort_values("cycle_index")
-            .reset_index(drop=True)
-        )
+        out[cell_id] = group[["cycle_index", "ah_c", "ah_d"]].sort_values("cycle_index").reset_index(drop=True)
     return out
-
-
-# -------------------------------------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------------------------------------
 # Pouch Cells (DL paper own data)
-# -------------------------------------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------------------------------------
 def parse_pouch_cells_rpt_metadata(xlsx_path: str) -> pd.DataFrame:
     """
     Parses a '<cell>_dchg_cap_rpt.xlsx' file. Confirmed to come in at least
     two different schemas across cells:
-
+ 
     Schema A (e.g. cell 019): one clean row per RPT, column 'discharge_cap'.
-
+ 
     Schema B (e.g. cell 034): MULTIPLE rows per RPT (typically 2-3, from
     repeated/partial discharge measurements within that RPT's capacity
     check), column 'discharge_ah' instead of 'discharge_cap', and an
@@ -309,7 +307,7 @@ def parse_pouch_cells_rpt_metadata(xlsx_path: str) -> pd.DataFrame:
     (e.g. a row at roughly half the others' value - probably a different
     sub-test, not the main capacity-check reading). No cluster-detection
     heuristic needed here, unlike the SNL case - just trust is_outlier.
-
+ 
     Note: at least one cell (034) has an RPT number that actually spans
     TWO separate checkup events ~16 days apart, sharing the same RPT
     label - likely a data-labeling quirk upstream. This function averages
@@ -317,20 +315,18 @@ def parse_pouch_cells_rpt_metadata(xlsx_path: str) -> pd.DataFrame:
     cases together rather than treating them as separate checkups. Worth
     knowing if you need RPT-level dates to line up precisely with a
     calendar timeline.
-
+ 
     Returns a DataFrame indexed by integer RPT number with a
     discharge_cap column (normalized name regardless of source schema).
     """
     df = pd.read_excel(xlsx_path)
     df = df.rename(columns={"RPT Number": "rpt_number"})
     df = df.rename(columns={"rpt": "rpt_number"})
-    df["rpt_number"] = (
-        df["rpt_number"].str.lower().str.replace("rpt", "", regex=False).astype(int)
-    )
-
+    df["rpt_number"] = df["rpt_number"].str.lower().str.replace("rpt", "", regex=False).astype(int)
+ 
     if "is_outlier" in df.columns:
         df = df[~df["is_outlier"]]
-
+ 
     if "discharge_ah" in df.columns and "discharge_cap" not in df.columns:
         df = df.rename(columns={"discharge_ah": "discharge_cap"})
     elif "discharge_cap" not in df.columns:
@@ -338,16 +334,16 @@ def parse_pouch_cells_rpt_metadata(xlsx_path: str) -> pd.DataFrame:
             f"Neither 'discharge_cap' nor 'discharge_ah' found in {xlsx_path}. "
             f"Actual columns: {list(df.columns)}"
         )
-
+ 
     # average multiple readings per RPT (schema B); a no-op for schema A,
     # which already has exactly one row per RPT
     result = df.groupby("rpt_number")["discharge_cap"].mean().to_frame()
     return result.sort_index()
+ 
+ 
 
-
-def parse_pouch_cells_rpt_curve(
-    parquet_path: str, rpt_number: int, batch_size: int = 1_000_000
-) -> pd.DataFrame:
+ 
+def parse_pouch_cells_rpt_curve(parquet_path: str, rpt_number: int, batch_size: int = 1_000_000) -> pd.DataFrame:
     """
     Streams through the (typically huge, ~100-200MB / tens of millions of
     rows) raw parquet and pulls out every row belonging to one RPT number.
@@ -380,15 +376,7 @@ def parse_pouch_cells_rpt_curve(
     pf = pq.ParquetFile(parquet_path)
     chunks = []
     for batch in pf.iter_batches(
-        columns=[
-            "time_stamp",
-            "current (A)",
-            "voltage (V)",
-            "step_no",
-            "temp",
-            "rpt",
-            "soc",
-        ],
+        columns=["time_stamp", "current (A)", "voltage (V)", "step_no", "temp", "rpt", "soc"],
         batch_size=batch_size,
     ):
         df = batch.to_pandas()
@@ -399,29 +387,21 @@ def parse_pouch_cells_rpt_curve(
     if not chunks:
         raise ValueError(f"No rows found for rpt == {rpt_number} in {parquet_path}")
 
-    raw = (
-        pd.concat(chunks, ignore_index=True)
-        .sort_values("time_stamp")
-        .reset_index(drop=True)
-    )
+    raw = pd.concat(chunks, ignore_index=True).sort_values("time_stamp").reset_index(drop=True)
     time_s = (raw["time_stamp"] - raw["time_stamp"].iloc[0]).dt.total_seconds()
-    out = pd.DataFrame(
-        {
-            "time_s": time_s.cumsum(),
-            "voltage_V": raw["voltage (V)"],
-            "current_A": raw["current (A)"],
-            "temp_C": raw["temp"],
-            "soc": raw["soc"],
-            "step_no": raw["step_no"],
-            # "cycle_number": rpt_number,
-        }
-    )
+    out = pd.DataFrame({
+        "time_s": time_s.cumsum(),
+        "voltage_V": raw["voltage (V)"],
+        "current_A": raw["current (A)"],
+        "temp_C": raw["temp"],
+        "soc": raw["soc"],
+        "step_no": raw["step_no"],
+        #"cycle_number": rpt_number,
+    })
     return out
 
 
-def extract_primary_charging_curve(
-    rpt_curve_df: pd.DataFrame, min_soc_range: float = 0.9
-) -> pd.DataFrame:
+def extract_primary_charging_curve(rpt_curve_df: pd.DataFrame, min_soc_range: float = 0.9) -> pd.DataFrame:
     """
     Isolates the single 'official' full charging curve from an RPT's raw
     multi-stage data (which typically contains several charge segments -
@@ -452,21 +432,17 @@ def extract_primary_charging_curve(
         raise ValueError(
             f"No charging segment found spanning >= {min_soc_range:.0%} of SOC range. "
             f"Available charging step_no values and their SOC ranges: "
-            + ", ".join(
-                f"step{s}: {g['soc'].max() - g['soc'].min():.2f}"
-                for s, g in charging.groupby("step_no")
-            )
+            + ", ".join(f"step{s}: {g['soc'].max()-g['soc'].min():.2f}"
+                        for s, g in charging.groupby("step_no"))
         )
-    # for candidate in candidates:
+    #for candidate in candidates:
     #    print(f"Step number : {candidate[0]}")
     candidates.sort(key=lambda x: x[0])  # chronologically first (lowest step_no)
     _, primary = candidates[0]
     return primary.sort_values("time_s").reset_index(drop=True)
 
 
-def compute_efc_per_rpt(
-    parquet_path: str, nominal_capacity_Ah: float, batch_size: int = 1_000_000
-) -> pd.Series:
+def compute_efc_per_rpt(parquet_path: str, nominal_capacity_Ah: float, batch_size: int = 1_000_000) -> pd.Series:
     """
     Approximates equivalent-full-cycle count at the START of each RPT, using
     total_dischg_thrgh_ah_rounded as a SIGNED counter measured relative to
@@ -485,9 +461,7 @@ def compute_efc_per_rpt(
 
     pf = pq.ParquetFile(parquet_path)
     rpt_min_throughput = {}
-    for batch in pf.iter_batches(
-        columns=["rpt", "total_dischg_thrgh_ah_rounded"], batch_size=batch_size
-    ):
+    for batch in pf.iter_batches(columns=["rpt", "total_dischg_thrgh_ah_rounded"], batch_size=batch_size):
         df = batch.to_pandas()
         g = df.groupby("rpt")["total_dischg_thrgh_ah_rounded"].min()
         for rpt_num, val in g.items():
@@ -540,13 +514,9 @@ def find_bracketing_rpts(efc_per_rpt: pd.Series, target_efc: float):
     return rpt_before, rpt_after, weight
 
 
-def build_pouch_cells_cell_record(
-    cell_id: str,
-    rpt_metadata: pd.DataFrame,
-    parquet_path: str = None,
-    nominal_capacity_Ah: float = None,
-    target_efc: int = 50,
-):
+
+def build_pouch_cells_cell_record(cell_id: str, rpt_metadata: pd.DataFrame, parquet_path: str = None,
+                               nominal_capacity_Ah: float = None, target_efc: int = 50):
     """
     cycle_life_rpt_units: RPT-index units ("reached 90% of initial capacity
     by RPT N"). If parquet_path is given, also computes cycle_life in
@@ -564,11 +534,7 @@ def build_pouch_cells_cell_record(
 
     cap_series = rpt_metadata["discharge_cap"]
     cycle_life_in_rpt_units = compute_cycle_life(cap_series)
-    nominal_cap = (
-        nominal_capacity_Ah
-        if nominal_capacity_Ah is not None
-        else float(cap_series.iloc[0])
-    )
+    nominal_cap = nominal_capacity_Ah if nominal_capacity_Ah is not None else float(cap_series.iloc[0])
 
     record = {
         "cell_id": cell_id,
@@ -583,9 +549,7 @@ def build_pouch_cells_cell_record(
     if parquet_path is not None:
         efc_per_rpt = compute_efc_per_rpt(parquet_path, nominal_cap)
         if cycle_life_in_rpt_units in efc_per_rpt.index:
-            record["cycle_life_efc_units"] = float(
-                efc_per_rpt.loc[cycle_life_in_rpt_units]
-            )
+            record["cycle_life_efc_units"] = float(efc_per_rpt.loc[cycle_life_in_rpt_units])
         rpt_before, rpt_after, weight = find_bracketing_rpts(efc_per_rpt, target_efc)
         record["efc50_rpt_before"] = int(rpt_before)
         record["efc50_rpt_after"] = int(rpt_after)
