@@ -302,8 +302,9 @@ def parse_snl_cycle_summary(csv_path: str) -> dict:
     out = {}
     for cell_id, group in df.groupby("cell_id"):
         out[cell_id] = group[["cycle_index", "ah_c", "ah_d"]].sort_values("cycle_index").reset_index(drop=True)
-
-    return out.rename(columns={"cycle_index": "cycle_number", "ah_d":"discharge_capacity_Ah"})
+        out[cell_id].rename(columns={"cycle_index": "cycle_number", "ah_d":"discharge_capacity_Ah"})
+    
+    return out
 
 
 #-------------------------------------------------------------------------------------------------------------

@@ -3,6 +3,7 @@ import re
 import numpy as np
 import pandas as pd
 from scipy.io import loadmat
+import matplotlib.pyplot as plt
 
 
 # ============================================================
@@ -26,6 +27,8 @@ FIELDS = [
     "Wh",
     "T1",
     "DateTime",
+    "AhChSet",
+    "AhDisSet"
 ]
 
 # Output type:
@@ -149,14 +152,45 @@ def load_dataset_from_mat(mat_file):
         squeeze_me=True,
         struct_as_record=False
     )
-
+    
     if "Dataset" not in data:
         raise KeyError(
             f"'Dataset' struct not found in {mat_file}"
         )
 
     dataset = data["Dataset"]
+    
+    for name in ["Time", "I", "Ah", "AhStep", "AhSet",
+                "Line", "Command", "State", "CycCount"]:
+        x = np.asarray(getattr(dataset, name)).squeeze()
+        print(
+            name,
+            "shape:", x.shape,
+            "first:", x[:10],
+            "last:", x[-10:]
+        )
+    for name in ["Command", "State", "Line", "CycCount"]:
+        x = np.asarray(getattr(dataset, name)).squeeze()
+        print(name, np.unique(x))
+    
+    t = np.asarray(getattr(dataset,"Time")).squeeze()
+    i = np.asarray(getattr(dataset,"I")).squeeze()
+    ah_step = np.asarray(getattr(dataset,"AhStep")).squeeze()
 
+    plt.figure()
+    plt.plot(t, i)
+    plt.xlabel("Time [h]")
+    plt.ylabel("Current [A]")
+    plt.savefig(f"project/reports/figures/tum/t_ah_{mat_file.name.split('.')[0]}")
+
+    plt.figure()
+    plt.plot(t, ah_step)
+    plt.xlabel("Time [h]")
+    plt.ylabel("AhStep [Ah]")
+    plt.savefig(f"project/reports/figures/tum/keys_plot_{mat_file.name.split('.')[0]}")
+
+
+    
     result = {}
 
     for field in FIELDS:
@@ -188,6 +222,7 @@ def dataset_to_dataframe(dataset, mat_file, cycle_number, cell_id):
     sample_count = max(set(lengths), key=lengths.count)
 
     df = pd.DataFrame()
+   
 
     # ----------------------------------------------------------------
     # Add identifying metadata
@@ -232,7 +267,9 @@ def dataset_to_dataframe(dataset, mat_file, cycle_number, cell_id):
         "Wh": "Wh_local",
     }
 
+
     df = df.rename(columns=rename_columns)
+
 
     return df
 
@@ -249,8 +286,8 @@ def find_cycling_files(data_root):
     """
 
     cycle_roots = [
-        data_root / "CYC_Cyclic",
-        data_root / "CYC_Dynamic",
+        data_root / "CU_Cyclic",
+        data_root / "CU_Dynamic",
     ]
 
     files = []
@@ -327,6 +364,7 @@ def combine_cell(cell_id, files):
 
         try:
             dataset = load_dataset_from_mat(mat_file)
+            
 
             df = dataset_to_dataframe(
                 dataset=dataset,

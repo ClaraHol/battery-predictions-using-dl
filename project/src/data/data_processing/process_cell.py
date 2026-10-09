@@ -40,7 +40,23 @@ def process_cell(df: pd.DataFrame, cell_id: str, source_dataset: str,
     per_cycle_discharge_cap = df.groupby("cycle_number")["discharge_capacity_Ah"].max()
     if source_dataset == "cmu":
         life = cmu_cycle_life(df)
+    elif source_dataset == "elt":
+        checks, cell_processed = find_capacity_checks(df, nominal_capacity_Ah=nominal_cap)
+        Q_ref = checks["capacity_Ah"].iloc[0]
+        checks["SOH_pct"] = checks["capacity_Ah"] / Q_ref * 100
+        #print(checks)
 
+        # Find first cycle below 90% SOH to compute cycle life
+        first_90_cycle = next(
+            (
+                int(checks["first_cycle"].iloc[cycle])
+                for cycle, soh in checks["SOH_pct"].items()
+                if soh <= 90
+            ),
+            None,
+        )
+        print(f"{first_90_cycle=}")
+        life = {"cycle_life": first_90_cycle, "censored": False, "n_full_cycles": len(checks["SOH_pct"])}
     else:
       
         life = compute_cycle_life_robust(df, per_cycle_discharge_cap, nominal_cap)
