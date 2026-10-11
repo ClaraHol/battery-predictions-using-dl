@@ -52,8 +52,10 @@ for battery, data in battery_data.items():
     )
 
 print("Total unique cells:")
-print("efc0 :", efc0["cell_id"].nunique())
-print("efc50:", efc50["cell_id"].nunique())
+print("efc0 :", efc0["battery_type"].nunique())
+print("efc50:", efc50["battery_type"].nunique())
 
-print("\nAll EFC0 cell IDs:")
-print(efc0["cell_id"].drop_duplicates().tolist())
+print("\nNumber of cells:", len(efc0))
+print("efc0 header:", efc0.columns.tolist())
+
+# print(len(efc0["time_s"]]))

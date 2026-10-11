@@ -83,7 +83,7 @@ model_path = (
     / "models"
     / "MLP_models"
     / "Combined"
-    / "mlp_combined.pt"
+    / "mlp_varied_combined.pt"
 )
 
 checkpoint = torch.load(model_path, map_location=device)
@@ -93,9 +93,17 @@ prior_max = checkpoint["prior_max"].to(device)
 prior_range = prior_max - prior_min
 parameter_names = checkpoint["parameter_names"]
 
+input_data_path = (
+    PROJECT_ROOT
+    / "models"
+    / "Varied_validation_simulations"
+    / f"dataset_{CHEMISTRIES[0]}.pt"
+)
+_, input_data = torch.load(input_data_path, map_location=device)
+
 model = ResidualNetRegressor(
-    in_features=100,
-    out_features=len(parameter_names),
+    in_features=input_data.shape[1],
+    out_features=9,
 ).to(device)
 
 model.load_state_dict(checkpoint["model_state_dict"])
@@ -115,7 +123,7 @@ for chemistry in CHEMISTRIES:
     path = (
         PROJECT_ROOT
         / "models"
-        / "Validation_simulations"
+        / "Varied_validation_simulations"
         / f"dataset_{chemistry}.pt"
     )
 

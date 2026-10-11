@@ -426,6 +426,7 @@ if __name__ == "__main__":
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.plot(train_losses, label="training_loss")
     ax.plot(val_losses, label="validation_loss")
+    ax.set_yscale("log")
     ax.set_xlabel("epoch")
     ax.set_ylabel("MSE loss (prior-normalized parameters)")
     ax.set_title(f"MLP training summary: s")
