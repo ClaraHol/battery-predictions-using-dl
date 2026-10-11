@@ -1,0 +1,8 @@
+SCRATCH="/work3/s214728/battery-predictions"
+
+mkdir -p "$SCRATCH/models"
+
+rsync -avh --info=progress2 \
+    --chmod=D755,F644 \
+    project/models/ \
+    "$SCRATCH/models/"
