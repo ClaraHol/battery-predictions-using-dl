@@ -1,6 +1,6 @@
 #BSUB -J TrainLargeMLP
-#BSUB -o outputs/TrainLargeMLP.out
-#BSUB -e outputs/TrainLargeMLP.err
+#BSUB -o outputs/TrainLargeVariedMLP.out
+#BSUB -e outputs/TrainLargeVariedMLP.err
 #BSUB -n 8
 #BSUB -R "span[hosts=1]"
 #BSUB -q hpc
@@ -13,4 +13,4 @@ source .venv/bin/activate
 
 
 
-python project/src/models/train_Large_varied_MLP.py
+python3 -u project/src/models/train_Large_varied_MLP_resumable.py --max-epochs 200
