@@ -18,7 +18,7 @@ except ImportError:  # fallback so this file can be tested standalone
     STANDARD_COLUMNS = ["time_s", "voltage_V", "current_A", "temp_C", "cycle_number",
                         "charge_capacity_Ah", "discharge_capacity_Ah"]
 
-SUMMARY_DIR = Path("vtc5a_summaries")      # <- output folder of build_cell_csvs.py
+SUMMARY_DIR = Path("work3/claho/battery_datasets/vtc5a/summaries")      # <- output folder of build_cell_csvs.py
 
 
 # ---------------------------------------------------------------- 1. parser
@@ -35,7 +35,7 @@ def parse_vtc5a(csv_path: str) -> pd.DataFrame:
     if n_resets:
         print(f"{csv_path}: Time resets {n_resets}x (file boundaries?) - continuous clock rebuilt")
 
-    cyc = np.asarray(raw["CycCount"], dtype=int)
+    cyc = np.asarray(raw["cycle"], dtype=int)
     cur = np.asarray(raw["I"], dtype=float)
 
     out = pd.DataFrame({
@@ -60,7 +60,7 @@ def _summary(cell_id: str, summary_dir=SUMMARY_DIR) -> pd.DataFrame:
     return pd.read_csv(Path(summary_dir) / f"{cell_id}.csv")
 
 
-def vtc5a_cycle_life(cell_id: str, soh: float = 0.9, summary_dir=SUMMARY_DIR) -> dict:
+def tum_cycle_life(cell_id: str, soh: float = 0.9, summary_dir=SUMMARY_DIR) -> dict:
     """Cycle life in EFC at `soh` (from check-up capacities). Same dict as the other branches.
     If SOH never reaches the threshold: cycle_life = last observed EFC, censored=True."""
     s = _summary(cell_id, summary_dir)

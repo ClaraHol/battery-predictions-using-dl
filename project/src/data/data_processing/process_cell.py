@@ -8,8 +8,9 @@ parsers.py) and produces:
 """
 
 import pandas as pd
-from cmu_processing import  cmu_cycle_life
-from config_and_cleaning import build_cell_record, compute_cycle_life_robust, compute_cc_c_rate, calculate_efc, find_capacity_checks
+from cmu_processing import  cmu_cycle_life_efc
+from lg_mj1_processing import lgmj1_cycle_life_from_df, discharge_runs
+from config_and_cleaning import build_cell_record, compute_cycle_life_efc, compute_cc_c_rate, calculate_efc, find_capacity_checks
 
 
 def process_cell(df: pd.DataFrame, cell_id: str, source_dataset: str,
@@ -38,28 +39,18 @@ def process_cell(df: pd.DataFrame, cell_id: str, source_dataset: str,
     # --- cycle life: first cycle where per-cycle discharge capacity drops
     # to 90% of the initial cycle's discharge capacity ---
     per_cycle_discharge_cap = df.groupby("cycle_number")["discharge_capacity_Ah"].max()
+    df = calculate_efc(df, nominal_cap, cell_id=source_dataset)
+    
     if source_dataset == "cmu":
-        life = cmu_cycle_life(df)
+        life = cmu_cycle_life_efc(df)
     elif source_dataset == "elt":
-        checks, cell_processed = find_capacity_checks(df, nominal_capacity_Ah=nominal_cap)
-        Q_ref = checks["capacity_Ah"].iloc[0]
-        checks["SOH_pct"] = checks["capacity_Ah"] / Q_ref * 100
-        #print(checks)
-
-        # Find first cycle below 90% SOH to compute cycle life
-        first_90_cycle = next(
-            (
-                int(checks["first_cycle"].iloc[cycle])
-                for cycle, soh in checks["SOH_pct"].items()
-                if soh <= 90
-            ),
-            None,
-        )
-        print(f"{first_90_cycle=}")
-        life = {"cycle_life": first_90_cycle, "censored": False, "n_full_cycles": len(checks["SOH_pct"])}
+        runs = discharge_runs(df)
+        runs[["efc_start", "efc_end"]] /= nominal_cap
+        life = lgmj1_cycle_life_from_df(df, nominal_Ah=nominal_cap, pick="max")
+        print(life["caps"])
     else:
-      
-        life = compute_cycle_life_robust(df, per_cycle_discharge_cap, nominal_cap)
+        efc_by_cycle = df.groupby("cycle_number")["EFC"].max()
+        life = compute_cycle_life_efc(df, per_cycle_discharge_cap, nominal_cap, efc_by_cycle=efc_by_cycle)
     
 
     # --- charge/discharge C-rate: mean over the whole cell's history.
@@ -75,8 +66,6 @@ def process_cell(df: pd.DataFrame, cell_id: str, source_dataset: str,
  
     def _mismatch(a, b):
         return b > 0 and abs(a - b) / b > 0.30
-
-    df = calculate_efc(df, nominal_cap)
 
     # --- temperature: mean over the whole cell's history ---
     temp_C = float(df["temp_C"].mean())
@@ -128,7 +117,6 @@ def process_cell(df: pd.DataFrame, cell_id: str, source_dataset: str,
             upper_curve = extract_charging_curve(df[df["EFC"] == upper])
             efc_late_df = pd.DataFrame({"lower_curve": lower_curve["voltage_V"], "upper_curve": upper_curve["voltage_V"], "weight":weight})
         else:
-            print(f"EFC {closest=}")
             curve = extract_charging_curve(df[df["EFC"] == closest])
             weight = 1
             efc_late_df = pd.DataFrame({"lower_curve": curve["voltage_V"], "upper_curve": curve["voltage_V"], "weight":weight})

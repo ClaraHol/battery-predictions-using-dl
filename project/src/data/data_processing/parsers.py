@@ -33,6 +33,7 @@ NEEDS INPUT (can't be inferred from the files alone):
 import re
 import numpy as np
 import pandas as pd
+from pathlib import Path
 
 STANDARD_COLUMNS = [
     "time_s", "voltage_V", "current_A", "temp_C",
@@ -104,6 +105,9 @@ def parse_vtc5a(csv_path: str) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # LG-MJ1 (4TU / VITO) - no native cycle number, no temperature column
 # ---------------------------------------------------------------------------
+
+RESET_THRESH_AH = 0.1
+
 def parse_lgmj1_filename(csv_path: str):
     temp_C = int(re.search(r'T(\d+)', csv_path.name).group(1))
     if "driving" in csv_path.name.lower():
@@ -114,36 +118,24 @@ def parse_lgmj1_filename(csv_path: str):
         dchrg_c = float(re.search(r"Dch(\d+(?:\.\d+)?)C", csv_path.name).group(1))
     return temp_C, chrg_c, dchrg_c
     
-def parse_lgmj1(csv_path: str) -> pd.DataFrame:
-    """
-    temp_C_nameplate: REQUIRED. The 4TU dataset was cycled at a fixed 25C or
-    45C per cell/folder, but that value isn't in the raw csv - pass it in
-    based on the filename/folder convention once you can see real filenames.
-    """
+
+def parse_lgmj1(csv_path) -> pd.DataFrame:
+    csv_path = Path(csv_path)
+    temp_C, _, _ = parse_lgmj1_filename(csv_path)
     df = pd.read_csv(csv_path)
     df.columns = [c.strip() for c in df.columns]
-    # first column is an unlabeled timestamp column in the sample we saw
-    ts_col = df.columns[0]
-   
-   
 
-
-    # A new cycle starts wherever Discharge_Capacity_Ah resets back near
-    # zero after having been nonzero - i.e. a sharp negative jump, not the
-    # gentle staying-at-zero during a rest step. Verified against a real
-    # sample: this fires exactly once per discharge->charge transition.
-    dcap = df["Discharge_Capacity_Ah"]
-    reset = dcap.diff() < -1e-4
-    cycle_number = reset.cumsum()
+    dcap = df["Discharge_Capacity_Ah"].ffill().fillna(0)
+    cycle_number = (dcap.diff() < -RESET_THRESH_AH).cumsum()
 
     out = pd.DataFrame({
         "time_s": pd.to_numeric(df["Total_Time_Seconds"], errors="coerce"),
         "voltage_V": df["Voltage_V"],
         "current_A": df["Current_A"],
-        "temp_C": np.nan,
+        "temp_C": float(temp_C),
         "cycle_number": cycle_number.astype(int),
         "charge_capacity_Ah": df["Charge_Capacity_Ah"],
-        "discharge_capacity_Ah": df["Discharge_Capacity_Ah"],
+        "discharge_capacity_Ah": dcap,
     })
     return out[STANDARD_COLUMNS]
 
@@ -184,7 +176,9 @@ def parse_samsung25r(csv_path: str) -> pd.DataFrame:
         "discharge_capacity_Ah": df["Q discharge/mA.h"] / 1000.0,
     })
     return out[STANDARD_COLUMNS]
-
+# ---------------------------------------------------------------------------
+# SNL - LFP and NMC batteries
+# ---------------------------------------------------------------------------
 
 SNL_CELL_ID_RE = re.compile(
     r"SNL_18650_(?P<chem>LFP|NMC)_(?P<temp>-?\d+)C_"
@@ -294,15 +288,15 @@ def parse_snl_cycle_summary(csv_path: str) -> dict:
     it does NOT include voltage curves (use parse_snl_voltage_timeseries
     for those).
 
-    Returns {cell_id: DataFrame[cycle_index, ah_d]} - only the columns
+    Returns {cell_id: DataFrame[cycle_number, discharge_capacity_Ah]} - only the columns
     actually needed for cycle-life computation are kept.
     """
     df = pd.read_csv(csv_path)
     df = pivot_long_to_wide(df, series_col="series", group_cols=["cell_id", "cycle_index", "test_time"])
     out = {}
     for cell_id, group in df.groupby("cell_id"):
-        out[cell_id] = group[["cycle_index", "ah_c", "ah_d"]].sort_values("cycle_index").reset_index(drop=True)
-        out[cell_id].rename(columns={"cycle_index": "cycle_number", "ah_d":"discharge_capacity_Ah"})
+        out[cell_id] = group[["cycle_index", "ah_d", "ah_c"]].sort_values("cycle_index").reset_index(drop=True)
+        out[cell_id].rename(columns={"cycle_index": "cycle_number", "ah_d":"discharge_capacity_Ah"}, inplace=True)
     
     return out
 
