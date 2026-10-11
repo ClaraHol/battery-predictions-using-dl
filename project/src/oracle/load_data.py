@@ -14,6 +14,7 @@ source_to_battery = {
     "tongji": "Samsung-25R",
     "tum": "Sony-VTC5A",
     "cmu": "Sony-VTC6",
+    "elt": "LG-MJ1"
 }
 
 
@@ -52,8 +53,8 @@ for battery, data in battery_data.items():
     )
 
 print("Total unique cells:")
-print("efc0 :", efc0["battery_type"].nunique())
-print("efc50:", efc50["battery_type"].nunique())
+print("efc0 :", efc0["cell_id"].nunique())
+print("efc50:", efc50["cell_id"].nunique())
 
 print("\nNumber of cells:", len(efc0))
 print("efc0 header:", efc0.columns.tolist())

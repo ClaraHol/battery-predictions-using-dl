@@ -143,7 +143,8 @@ def vtc5a_curves(cell_id, idx, summary_dir=SUMMARY_DIR, efc_early=0.0, efc_late=
  
     early = None
     if efc_early >= efcs.min() - 1e-9:
-        early = _cycle_frame(cands[int(np.abs(efcs - efc_early).argmin())], cid)
+        v = _charging_curve(_cycle_frame(cands[int(np.abs(efcs - efc_early).argmin())], cid))["voltage_V"]
+        early = pd.DataFrame({"early_curve": v})
  
     late = None
     if efc_late <= efcs.max():
@@ -158,6 +159,8 @@ def vtc5a_curves(cell_id, idx, summary_dir=SUMMARY_DIR, efc_early=0.0, efc_late=
         else:
             v = _charging_curve(_cycle_frame(cands[i], cid))["voltage_V"]
             late = pd.DataFrame({"lower_curve": v, "upper_curve": v, "weight": 1})
+    else:
+        print(f"{cell_id} - Missing efc 50 (max efc = {efcs.max()})")
     return early, late
  
  
@@ -189,7 +192,7 @@ def process_cell_vtc5a(cell_id, idx, summary_dir=SUMMARY_DIR, soh=0.9,
     temp_C = temp_C if temp_C is not None else float(r["mean_T_surface_C"])
  
     meta = build_cell_record(
-        cell_id=str(cell_id), source_dataset="tum", temp_C_raw=temp_C,
+        cell_id="tum_" + str(cell_id), source_dataset="tum", temp_C_raw=temp_C,
         charge_c_rate_raw=charge_c, discharge_c_rate_raw=discharge_c,
         cycle_life=life["cycle_life"],
         initial_discharge_capacity_Ah=float(s["capacity_Ah"].dropna().iloc[0]),

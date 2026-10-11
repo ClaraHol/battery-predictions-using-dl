@@ -6,7 +6,7 @@ parsers.py) and produces:
      (kept separate from cleaning/metadata so re-running feature extraction
      later doesn't require re-parsing every raw file)
 """
-
+import numpy as np
 import pandas as pd
 from cmu_processing import  cmu_cycle_life_efc
 from lg_mj1_processing import lgmj1_cycle_life_from_df, discharge_runs
@@ -47,7 +47,6 @@ def process_cell(df: pd.DataFrame, cell_id: str, source_dataset: str,
         runs = discharge_runs(df)
         runs[["efc_start", "efc_end"]] /= nominal_cap
         life = lgmj1_cycle_life_from_df(df, nominal_Ah=nominal_cap, pick="max")
-        print(life["caps"])
     else:
         efc_by_cycle = df.groupby("cycle_number")["EFC"].max()
         life = compute_cycle_life_efc(df, per_cycle_discharge_cap, nominal_cap, efc_by_cycle=efc_by_cycle)
@@ -98,10 +97,13 @@ def process_cell(df: pd.DataFrame, cell_id: str, source_dataset: str,
 
     if efc_early >= efcs.min():
         closest = efcs.loc[(efcs).abs().idxmin()]
-        efc_early_df = df[df["EFC"] == closest].copy()
-        efc_early_df["cell_id"] = cell_id
+        curve = extract_charging_curve(df[df["EFC"] == closest])
+        weight = 1
+        efc_early_df = pd.DataFrame({"early_curve": curve["voltage_V"]})
+        
     else:
         efc_early_df = None
+        print(f"{cell_id} - Missing efc 1")
 
     if efc_late <= efcs.max():
         closest = efcs.loc[(efcs - efc_late).abs().idxmin()]
@@ -109,21 +111,28 @@ def process_cell(df: pd.DataFrame, cell_id: str, source_dataset: str,
         if abs(closest - efc_late) >= 0.5:
             lower = efcs[efcs < efc_late].max()
             upper = efcs[efcs > efc_late].min()
+
             print(f"EFC {lower=}, EFC {upper=}")
 
             weight = (efc_late - lower) / (upper - lower)
-            
+        
             lower_curve = extract_charging_curve(df[df["EFC"] == lower])
             upper_curve = extract_charging_curve(df[df["EFC"] == upper])
+            
             efc_late_df = pd.DataFrame({"lower_curve": lower_curve["voltage_V"], "upper_curve": upper_curve["voltage_V"], "weight":weight})
         else:
+            m = df["EFC"] == closest
+            print(m.sum(), (df.loc[m, "current_A"] > 0).sum()) 
             curve = extract_charging_curve(df[df["EFC"] == closest])
             weight = 1
             efc_late_df = pd.DataFrame({"lower_curve": curve["voltage_V"], "upper_curve": curve["voltage_V"], "weight":weight})
-        
+            
 
     else:
         efc_late_df = None
+        print(f"{cell_id} - Missing efc 50 (max efc = {efcs.max()})")
+
+   
 
     return metadata, efc_early_df, efc_late_df
 
@@ -148,6 +157,33 @@ def extract_charging_curve(efc_df: pd.DataFrame, has_current: bool = True):
         return efc_df.copy()
     return efc_df[efc_df["current_A"] > 0].copy()
 
+
+def charge_segments(df, i_thresh_A=0.05, min_rows=20):
+    """Table of charge segments in FILE order (no sorting): EFC at segment start, plus the rows."""
+    chg = (df["current_A"].to_numpy(float) > i_thresh_A)
+    seg = np.cumsum(np.r_[True, chg[1:] != chg[:-1]])
+    d = df.loc[chg].assign(_seg=seg[chg])
+    tbl = d.groupby("_seg").agg(efc=("EFC", "first"), n=("EFC", "size"))
+    tbl = tbl[tbl["n"] >= min_rows]
+    return tbl, d
+
+
+def charging_curves_at(df, target_efc, tol=0.5, name_a="lower_curve", name_b="upper_curve"):
+    """Returns (DataFrame, weight) or None. Same weight convention as your code."""
+    tbl, d = charge_segments(df)
+    if tbl.empty or target_efc > tbl["efc"].max() + tol or target_efc < tbl["efc"].min() - tol:
+        return None
+    efc = tbl["efc"]
+    below, above = efc[efc <= target_efc], efc[efc > target_efc]
+    if below.empty or above.empty or abs(efc - target_efc).min() < tol:
+        s = (efc - target_efc).abs().idxmin()                  # close enough: use one segment
+        v = d.loc[d["_seg"] == s, "voltage_V"].reset_index(drop=True)
+        return pd.DataFrame({name_a: v, name_b: v, "weight": 1.0}), 1.0
+    lo, hi = below.idxmax(), above.idxmin()
+    w = (target_efc - efc[lo]) / (efc[hi] - efc[lo])
+    vlo = d.loc[d["_seg"] == lo, "voltage_V"].reset_index(drop=True)
+    vhi = d.loc[d["_seg"] == hi, "voltage_V"].reset_index(drop=True)
+    return pd.DataFrame({name_a: vlo, name_b: vhi, "weight": w}), w
 
 # def extract_charging_curve(df: pd.DataFrame, efc_number: int, has_current: bool = True):
 #     """
