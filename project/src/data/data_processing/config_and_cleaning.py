@@ -148,6 +148,45 @@ def compute_cc_c_rate(df: pd.DataFrame, nominal_capacity_Ah: float, direction: s
         return 0.0
     return float(np.median(per_cycle)) / nominal_capacity_Ah
 
+def compute_cycle_life_efc(df, discharge_capacity_by_cycle: pd.Series,
+                              nominal_capacity_Ah: float,
+                              efc_by_cycle: pd.Series,
+                              window: int = 5, n_reference: int = 5,
+                              min_fraction_of_nominal: float = 0.5,
+                              eol_fraction: float = 0.9,
+                              interpolate: bool = True) -> dict:
+    s = discharge_capacity_by_cycle.dropna().sort_index()
+    s = s[s >= min_fraction_of_nominal * nominal_capacity_Ah]
+    if len(s) == 0:
+        raise ValueError("No full-capacity cycles found - cannot compute cycle life")
+
+    # EFC for each retained cycle (computed before filtering, so partial cycles still count)
+    efc = efc_by_cycle.reindex(s.index)
+    if efc.isna().any():
+        raise ValueError("efc_by_cycle is missing entries for some full cycles")
+
+    reference = float(s.iloc[:n_reference].median())
+    thresh = eol_fraction * reference
+    smoothed = s.rolling(window, center=True, min_periods=1).median()
+    below = smoothed[smoothed <= thresh]
+    censored = len(below) == 0
+
+    if censored:
+        life_efc = float(efc.iloc[-1])            # lower bound
+        life_cycle = int(s.index[-1])
+    else:
+        life_cycle = int(below.index[0])
+        pos = smoothed.index.get_loc(life_cycle)
+        life_efc = float(efc.iloc[pos])
+        if interpolate and pos > 0:               # linear crossing between bracketing points
+            c0, c1 = smoothed.iloc[pos - 1], smoothed.iloc[pos]
+            if c0 > thresh >= c1:
+                frac = (c0 - thresh) / (c0 - c1)
+                life_efc = float(efc.iloc[pos - 1] + frac * (efc.iloc[pos] - efc.iloc[pos - 1]))
+
+    return {"cycle_life_efc": life_efc, "cycle_life": life_cycle, "censored": censored,
+            "reference_capacity_Ah": reference, "n_full_cycles": int(len(s))}
+
 
 def compute_cycle_life_robust(df: pd.DataFrame, discharge_capacity_by_cycle: pd.Series,
                                nominal_capacity_Ah: float,
@@ -193,7 +232,7 @@ def calculate_efc(df, q_nom, reset_threshold=0.1, cell_id = None):
     discharge_capacity = df["discharge_capacity_Ah"].astype(float).to_numpy()
 
    
-    if cell_id=="snl":
+    if cell_id == "snl":
         
         df["EFC"] = discharge_capacity.cumsum()/q_nom
     else:
@@ -206,13 +245,8 @@ def calculate_efc(df, q_nom, reset_threshold=0.1, cell_id = None):
     
         # Accumulated capacity before each reset
         offset = np.zeros(len(df))
-    
-        accumulated_capacity = 0.0
-        for i in range(len(df)):
-            if reset[i]:
-                accumulated_capacity += discharge_capacity[i - 1]
-
-            offset[i] = accumulated_capacity
+        prev = np.r_[discharge_capacity[0], discharge_capacity[:-1]]
+        offset = np.cumsum(np.where(reset, prev, 0.0))  
 
         # Global discharged capacity
         #df["discharge_capacity_global_Ah"] = discharge_capacity + offset
@@ -269,6 +303,7 @@ def find_capacity_checks(cell_df: pd.DataFrame, nominal_capacity_Ah: float,
       df: original data with capacity_check / capacity_check_id columns added
     """
     df = cell_df.sort_values("cycle_number").reset_index(drop=True).copy()
+    df = calculate_efc(df, q_nom=nominal_capacity_Ah, cell_id="snl")
  
     is_candidate = df["discharge_capacity_Ah"] >= min_fraction_of_nominal * nominal_capacity_Ah
  
@@ -289,6 +324,7 @@ def find_capacity_checks(cell_df: pd.DataFrame, nominal_capacity_Ah: float,
             "n_cycles": len(g),
             "capacity_Ah": capacity,
             "n_outliers_excluded": len(g) - len(non_outlier),
+            "EFC": g["EFC"].max()
         })
  
     checks = (

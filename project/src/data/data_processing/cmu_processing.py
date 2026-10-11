@@ -61,29 +61,58 @@ def label_cmu_blocks(df: pd.DataFrame) -> pd.DataFrame:
     df["mission_cycle"] = df["block"].map(mission_count).astype(int)
     return df
 
-
-def per_block_table(df: pd.DataFrame, max_dt_s: float = 30.0,
-                    discharge_sign: int = -1) -> pd.DataFrame:
-    """One row per block: integrated discharge Ah, duration, mean discharge current."""
+def per_block_table(df, max_dt_s=30.0, discharge_sign=1):
+    "EFC should already be calculated"
     t = df["time_s"].to_numpy(float)
-    I = df["current_A"].to_numpy(float) * discharge_sign   # discharge -> positive
-    I_dis = np.clip(I, 0, None)
+    I_dis = np.clip(df["current_A"].to_numpy(float) * discharge_sign, 0, None)
+    blk = df["block"].to_numpy()
     dt = np.diff(t, prepend=t[0])
-    same_block = np.r_[False, df["block"].to_numpy()[1:] == df["block"].to_numpy()[:-1]]
-    dt = np.where(same_block & (dt <= max_dt_s), dt, 0.0)       # drop gaps / block edges
-    dQ = np.r_[0, 0.5 * (I_dis[1:] + I_dis[:-1])] * dt / 3600.0 # Ah
+    same = np.r_[False, blk[1:] == blk[:-1]]
+    dt = np.where(same & (dt <= max_dt_s), dt, 0.0)
+    dQ = np.r_[0, 0.5 * (I_dis[1:] + I_dis[:-1])] * dt / 3600.0
 
-    tmp = df.assign(dQ=dQ)
-    out = tmp.groupby("block").agg(
-        t_start=("time_s", "min"),
-        t_end=("time_s", "max"),
-        is_mission=("is_mission", "first"),    
+    out = (df.assign(dQ=dQ).groupby("block").agg(
+        t_start=("time_s", "min"), t_end=("time_s", "max"),
+        is_mission=("is_mission", "first"),
+        is_capacity=("is_capacity", "first"),
         mission_cycle=("mission_cycle", "first"),
         discharge_Ah=("dQ", "sum"),
-        is_capacity=("is_capacity", "first")
-    )
-    return out.reset_index()
+        efc_start=("EFC", "min"),
+        efc_end=("EFC", "max"),
+    ).reset_index())
+    return out
 
+
+def cmu_cycle_life_efc(df, nominal_Ah=3.0, eol=0.9, min_frac=0.8,
+                       outlier_frac=1.2, n_ref=1):
+    blocks = per_block_table(label_cmu_blocks(df))
+
+    caps = blocks[blocks.is_capacity &
+                  (blocks.discharge_Ah >= min_frac * nominal_Ah) &
+                  (blocks.discharge_Ah <= outlier_frac * nominal_Ah)].copy()
+    caps = (caps.groupby("mission_cycle", as_index=False)
+                .agg(capacity_Ah=("discharge_Ah", "max"),
+                     efc=("efc_start", "min")))   # EFC accumulated before the test
+    caps = caps.sort_values("efc").reset_index(drop=True)
+
+    ref = caps["capacity_Ah"].iloc[:n_ref].median()
+    thresh = eol * ref
+    below = caps[caps["capacity_Ah"] <= thresh]
+
+    if below.empty:
+        return dict(cycle_life=float(blocks.efc_end.iloc[-1]), censored=True, 
+                    n_full_cycles = int(blocks.mission_cycle.max()),
+                    reference_Ah=ref, caps=caps)
+
+    i = below.index[0]
+    if i == 0:
+        life = caps.loc[i, "efc"]
+    else:
+        c0, c1 = caps.loc[i - 1], caps.loc[i]
+        frac = (c0.capacity_Ah - thresh) / (c0.capacity_Ah - c1.capacity_Ah)
+        life = c0.efc + frac * (c1.efc - c0.efc)
+    return dict(cycle_life=float(life), censored=False, n_full_cycles = int(blocks.mission_cycle.max()),
+                reference_Ah=ref, caps=caps)
 
 def cmu_cycle_life(df, nominal_Ah=3.0, eol=0.9, min_frac=0.8,
                    outlier_frac=1.2, n_ref=3):

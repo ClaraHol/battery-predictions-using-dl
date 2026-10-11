@@ -41,14 +41,16 @@ from pathlib import Path
 import pandas as pd
 
 from parsers import (
-    parse_cmu_vtc6, parse_vtc5a, parse_lgmj1, parse_lgmj1_filename,
+    parse_cmu_vtc6, parse_lgmj1, parse_lgmj1_filename,
     parse_samsung25r, parse_samsung25r_filename, parse_snl_voltage_timeseries, parse_snl_cycle_summary
 )
+from tum_pipeline import build_index, process_cell_vtc5a 
+from tum_processing import read_overview
 from process_cell import process_cell
 from config_and_cleaning import apply_three_step_cleaning, build_cell_record, calculate_efc, find_capacity_checks, NOMINAL_CAPACITY_AH
 
 DATA_ROOT = Path(f"/work3/claho/battery_datasets")
-OUTPUT_DIR = Path(f"/work3/claho/battery_datasets/processed")
+OUTPUT_DIR = Path(f"/work3/claho/battery_datasets/processed_test")
 
 EFC_EARLY = 1
 EFC_LATE = 50
@@ -90,20 +92,22 @@ def main():
     # --- Sony-VTC5A (TUM), cyclic/dynamic only ---
 
     tum_dir = DATA_ROOT / "sony_vtc5a"
-    tum_files = [f for f in tum_dir.glob("**/*.csv") if "calendar" not in str(f).lower()]
-    print(f"[tum] found {len(tum_files)} cyclic/dynamic files")
-    for f in tum_files:
-        cell_id = f"tum_{f.stem}"
+    idx = build_index(tum_dir)
+    overview = read_overview(tum_dir / "bawaii_cell_overview_publication.xlsx")   # from build_cell_csvs
+    keep = overview[overview["aging_domain"].str.lower().str.startswith("cycl")
+                    | overview["aging_domain"].str.lower().str.startswith("dyn")]
+    cells = [f"BW-VTC-{n:03d}" for n in keep.index]
+    print(f"[tum] found {len(cells)} cyclic/dynamic files")
+    for cell in cells:
+        cell_id = f"tum_{cell}"
         try:
-            
-            df = parse_vtc5a(f)
-            meta, efc0, efc50 = process_cell(df, cell_id, "tum", efc_early=EFC_EARLY, efc_late=EFC_LATE)
+            meta, efc0, efc50 = process_cell_vtc5a(cell, idx)
             metadata_rows.append(meta)
             add_charging_curves(efc0, efc50, cell_id, charging_early_frames, charging_late_frames)
         except Exception as e:
             errors.append((cell_id, "tum", str(e), traceback.format_exc()))
   
-    # --- LG-MJ1 (4TU) - still needs temp_C_nameplate per file, see build_dataset.py ---
+    # --- LG-MJ1 (4TU) ---
     elt_dir = DATA_ROOT / "lg_mj1"
     elt_files = list(elt_dir.glob("**/*.csv"))
     print(f"[elt] found {len(elt_files)} files")
@@ -113,7 +117,6 @@ def main():
         try:
             temp_C, chrg_c, dchrg_c = parse_lgmj1_filename(f)
             df = parse_lgmj1(f)
-            df["temp_C"] = temp_C
             if chrg_c == None:
                 meta, efc0, efc50 = process_cell(df, cell_id, "elt", efc_early=EFC_EARLY, efc_late=EFC_LATE)
             else:
@@ -159,9 +162,11 @@ def main():
                 max_cycle = MAX_CYCLE[diff]
                 # Compute SOH from capacity test cycles
                 info["discharge_capacity_Ah"] = snl_meta_data[cell_id]["discharge_capacity_Ah"].iloc[:max_cycle]
-
-               
+                # Compute EFC
                 nom_cap = NOMINAL_CAPACITY_AH[info["source_dataset"]]
+                info = calculate_efc(info, q_nom = nom_cap, cell_id="snl")
+               
+               
     
                 if info["dod_low_pct"]==0:
                     checks, cell_processed = find_capacity_checks(snl_meta_data[cell_id], nominal_capacity_Ah=nom_cap, min_fraction_of_nominal=1.5, outlier_fraction_of_nominal=2.5)
@@ -175,7 +180,7 @@ def main():
                 # Find first cycle below 90% SOH to compute cycle life
                 first_90_cycle = next(
                     (
-                        int(checks["first_cycle"].iloc[cycle])
+                        int(checks["EFC"].iloc[cycle])
                         for cycle, soh in checks["SOH_pct"].items()
                         if soh <= 90
                     ),
@@ -183,11 +188,6 @@ def main():
                 )
                 print(f"{first_90_cycle=}")
             
-                # Compute EFC
-                info = calculate_efc(info, q_nom = nom_cap, cell_id="snl")
-            
-                
-                
                 full_cell_id = f"{info['source_dataset']}_{cell_id}"
                 metadata_rows.append(build_cell_record(
                     cell_id=full_cell_id,
@@ -205,19 +205,23 @@ def main():
 
                     if target == EFC_LATE:
                         closest = efcs[np.argmin(np.abs(efcs - target))]
+                        index = np.argmin(np.abs(efcs - target))
+                        print(index)
 
                         if abs(closest - target) < 0.5:
                             print(f"{closest=}")
                             weight = 1
-                            curve = pd.DataFrame({"lower_curve": info["voltage_curves"][closest].copy(), "upper_curve": info["voltage_curves"][closest].copy(), "weight":weight})
+                            curve = pd.DataFrame({"lower_curve": info["voltage_curves"][index].copy(), "upper_curve": info["voltage_curves"][index].copy(), "weight":weight})
                    
                         else:
                             lower = efcs[efcs < target].max() if np.any(efcs < target) else None
                             upper = efcs[efcs > target].min() if np.any(efcs > target) else None
+                            idx_lower =  efcs[efcs < target].argmax()
+                            idx_upper = efcs[efcs > target].argmin()
                             print(f"{lower=}")
                             print(f"{upper=}")
                             weight = (target - lower) / (upper - lower)
-                            curve = pd.DataFrame({"lower_curve": info["voltage_curves"][lower].copy(), "upper_curve": info["voltage_curves"][upper].copy(), "weight":weight})
+                            curve = pd.DataFrame({"lower_curve": info["voltage_curves"][idx_lower].copy(), "upper_curve": info["voltage_curves"][idx_upper].copy(), "weight":weight})
                             curve["cell_id"] = full_cell_id
                     else:
                         if target in info["EFC"]:
