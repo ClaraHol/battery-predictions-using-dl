@@ -65,9 +65,9 @@ def add_charging_curves(early, late, cell_id, early_frames, late_frames):
         late["cell_id"] = cell_id
         early_frames.append(early)
         late_frames.append(late)
-    else:
-        print(f"[{cell_id}] - missing or empty efc curve")
-        print(f"          {len(early)},\n      {len(late)} ")
+    elif early is not None and late is not None:
+        print(f"[{cell_id}] - empty efc curve (early has length{len(early)}, late has length {len(late)})")
+   
 
 
 def main():
@@ -172,6 +172,13 @@ def main():
     if not metadata_rows:
         print("\nNo cells were successfully parsed.")
     else:
+        for name, frames in [("charging_curve_early_all", charging_early_frames),
+                            ("charging_curve_late_all", charging_late_frames)]:
+                  
+            pd.concat(frames, ignore_index=True).to_csv(
+                OUTPUT_DIR / f"public_{name}.csv", index=False)
+            print(f"{name} -> {OUTPUT_DIR / f'public_{name}.csv'}")
+
         cells_df = pd.DataFrame(metadata_rows)
         cells_df.to_csv(OUTPUT_DIR / "public_cell_metadata_all.csv", index=False)
         print(f"\nParsed {len(cells_df)} cells -> {OUTPUT_DIR / 'public_cell_metadata_all.csv'}")

@@ -101,7 +101,7 @@ def cmu_cycle_life_efc(df, nominal_Ah=3.0, eol=0.9, min_frac=0.8,
 
     if below.empty:
         return dict(cycle_life=float(blocks.efc_end.iloc[-1]), censored=True, 
-                    n_full_cycles = int(blocks.mission_cycle.max()),
+                    n_full_cycles = int(blocks.efc_end.max()),
                     reference_Ah=ref, caps=caps)
 
     i = below.index[0]
@@ -111,7 +111,7 @@ def cmu_cycle_life_efc(df, nominal_Ah=3.0, eol=0.9, min_frac=0.8,
         c0, c1 = caps.loc[i - 1], caps.loc[i]
         frac = (c0.capacity_Ah - thresh) / (c0.capacity_Ah - c1.capacity_Ah)
         life = c0.efc + frac * (c1.efc - c0.efc)
-    return dict(cycle_life=float(life), censored=False, n_full_cycles = int(blocks.mission_cycle.max()),
+    return dict(cycle_life=float(life), censored=False, n_full_cycles = int(blocks.efc_end.max()),
                 reference_Ah=ref, caps=caps)
 
 def cmu_cycle_life(df, nominal_Ah=3.0, eol=0.9, min_frac=0.8,
@@ -141,4 +141,4 @@ def cmu_cycle_life(df, nominal_Ah=3.0, eol=0.9, min_frac=0.8,
         c0, c1 = caps.loc[i - 1], caps.loc[i]
         frac = (c0.capacity_Ah - thresh) / (c0.capacity_Ah - c1.capacity_Ah)
         life = int(round(c0.mission_cycle + frac * (c1.mission_cycle - c0.mission_cycle)))
-    return dict(cycle_life=life, censored=False, reference_Ah=ref, caps=caps, n_full_cycles=int(blocks.mission_cycle.max()))
+    return dict(cycle_life=life, censored=False, reference_Ah=ref, caps=caps, n_full_cycles=int(blocks.efc_end.max()))

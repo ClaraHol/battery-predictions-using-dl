@@ -155,10 +155,13 @@ def vtc5a_curves(cell_id, idx, summary_dir=SUMMARY_DIR, efc_early=0.0, efc_late=
             w = (efc_late - efcs[lo]) / (efcs[up] - efcs[lo])
             lc = _charging_curve(_cycle_frame(cands[lo], cid))["voltage_V"]
             uc = _charging_curve(_cycle_frame(cands[up], cid))["voltage_V"]
-            late = pd.DataFrame({"lower_curve": lc, "upper_curve": uc, "weight": w})
+            lct = _charging_curve(_cycle_frame(cands[lo], cid))["time_s"]
+            uct = _charging_curve(_cycle_frame(cands[up], cid))["time_s"]
+            late = pd.DataFrame({"lower_curve_time": lct, "upper_curve_time": uct, "lower_curve": lc, "upper_curve": uc, "weight": w})
         else:
             v = _charging_curve(_cycle_frame(cands[i], cid))["voltage_V"]
-            late = pd.DataFrame({"lower_curve": v, "upper_curve": v, "weight": 1})
+            vt = _charging_curve(_cycle_frame(cands[i], cid))["time_s"]
+            late = pd.DataFrame({"lower_curve_time": vt, "upper_curve_time": vt, "lower_curve": v, "upper_curve": v, "weight": 1})
     else:
         print(f"{cell_id} - Missing efc 50 (max efc = {efcs.max()})")
     return early, late
@@ -171,7 +174,7 @@ def vtc5a_cycle_life(cell_id, soh=0.9, summary_dir=SUMMARY_DIR):
     censored = bool(np.isnan(life))
     if censored:                                            # right-censored: last observed EFC
         life = float(s["EFC"].max())
-    return {"cycle_life": life, "censored": censored, "n_full_cycles": int(len(s))}
+    return {"cycle_life": life, "censored": censored, "n_full_cycles": float(s["EFC"].max())}
  
  
 def process_cell_vtc5a(cell_id, idx, summary_dir=SUMMARY_DIR, soh=0.9,
