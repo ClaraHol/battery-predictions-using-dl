@@ -1,14 +1,15 @@
 from pathlib import Path
-
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
-import pyarrow.parquet as pq
+
 
 DATA_ROOT = Path("/work3/claho/battery_datasets/processed/")
 OUTPUT_DIR = Path("project/reports/figures/public_cells")
 metadata_path = "public_cell_metadata_cleaned.csv"
 metadata = pd.read_csv(DATA_ROOT/ metadata_path)
+metadata = metadata[metadata["cycle_life_censored"] == False]
+print(metadata["cell_id"].nunique())
+print(metadata.shape[0])
 
 
 cycle_lives = {}
@@ -33,4 +34,3 @@ ax[1,1].boxplot(dchrg_rates.values(), tick_labels = dchrg_rates.keys())
 ax[1,1].set_title("Discharge C-Rate")
 plt.tight_layout()
 plt.savefig(OUTPUT_DIR/"metadata_boxplot")
-import pyarrow.parquet as pq

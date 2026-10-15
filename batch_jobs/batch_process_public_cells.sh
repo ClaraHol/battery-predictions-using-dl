@@ -4,7 +4,7 @@
 #BSUB -n 1
 #BSUB -R "span[hosts=1]"
 #BSUB -q hpc
-#BSUB -W 01:00
+#BSUB -W 00:30
 #BSUB -R "rusage[mem=8GB]"
 #BSUB -M 8GB
 

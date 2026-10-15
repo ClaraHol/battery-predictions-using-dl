@@ -13,6 +13,7 @@ source_to_battery = {
     "tongji": "Samsung-25R",
     "tum": "Sony-VTC5A",
     "cmu": "Sony-VTC6",
+    "elt": "LG-MJ1"
 }
 
 

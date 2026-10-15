@@ -167,8 +167,7 @@ def compute_cycle_life_efc(df, discharge_capacity_by_cycle: pd.Series,
 
     reference = float(s.iloc[:n_reference].median())
     thresh = eol_fraction * reference
-    smoothed = s.rolling(window, center=True, min_periods=1).median()
-    below = smoothed[smoothed <= thresh]
+    below = s[s <= thresh]
     censored = len(below) == 0
 
     if censored:
@@ -176,10 +175,10 @@ def compute_cycle_life_efc(df, discharge_capacity_by_cycle: pd.Series,
         life_cycle = int(s.index[-1])
     else:
         life_cycle = int(below.index[0])
-        pos = smoothed.index.get_loc(life_cycle)
+        pos = s.index.get_loc(life_cycle)
         life_efc = float(efc.iloc[pos])
         if interpolate and pos > 0:               # linear crossing between bracketing points
-            c0, c1 = smoothed.iloc[pos - 1], smoothed.iloc[pos]
+            c0, c1 = s.iloc[pos - 1], s.iloc[pos]
             if c0 > thresh >= c1:
                 frac = (c0 - thresh) / (c0 - c1)
                 life_efc = float(efc.iloc[pos - 1] + frac * (efc.iloc[pos] - efc.iloc[pos - 1]))
@@ -233,8 +232,8 @@ def calculate_efc(df, q_nom, reset_threshold=0.1, cell_id = None):
 
    
     if cell_id == "snl":
+        df["EFC"] = np.nan_to_num(discharge_capacity, nan=0.0).cumsum() / q_nom
         
-        df["EFC"] = discharge_capacity.cumsum()/q_nom
     else:
         # Difference between consecutive capacity values
         dQ = np.diff(discharge_capacity, prepend=discharge_capacity[0])
@@ -450,6 +449,7 @@ def apply_three_step_cleaning(
     # Step 2: cycle life
     df = df[df["cycle_life"] >= MIN_CYCLE_LIFE]
     n2 = len(df)
+    df = df[df["cycle_life_censored"] == False]
 
     # Step 3: cluster size
     df["operational_cluster"] = list(
