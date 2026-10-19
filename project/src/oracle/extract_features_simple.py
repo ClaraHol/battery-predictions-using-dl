@@ -32,11 +32,12 @@ CHEMISTRY_CONFIG = {
 }
 
 SOURCE_TO_CHEMISTRY = {
-    "snl_lfp_": "M1A",
-    "snl_nmc_": "HG2",
     "tongji_": "25R",
     "tum_": "VTC5A",
     "cmu_": "VTC6",
+    "SNL_18650_LFP_": "M1A",
+    "SNL_18650_NMC_": "HG2",
+    "elt_": "MJ1",
 }
 
 
@@ -51,7 +52,7 @@ def get_chemistry(cell_id):
 # 1. Load all chemistry-specific SBI models
 # ============================================================
 
-def load_all_SBI():
+def load_combined_SBI():
     models = {}
 
     for chemistry, (capacity, current, v_min, v_max) in CHEMISTRY_CONFIG.items():
@@ -84,7 +85,7 @@ def load_all_SBI():
 
         posterior = inference.build_posterior(prior=prior)
 
-        models[chemistry] = {
+        model = {
             "posterior": posterior,
             "param_names": list(params_log.keys()),
             "log_flags": list(module.params_log_flag.values()),
@@ -104,7 +105,7 @@ def load_all_SBI():
 # 2. Inference on experimental voltage/time curves
 # ============================================================
 
-def SBI_inference(model, voltage, time):
+def SBI_inference(model, voltage, time, n_samples = 50000):
     voltage = np.asarray(voltage, dtype=float)
     time = np.asarray(time, dtype=float)
 
@@ -119,6 +120,7 @@ def SBI_inference(model, voltage, time):
     voltage = voltage[unique_idx]
 
     if len(time) < 2 or time[-1] <= time[0]:
+        print(time)
         raise ValueError("Curve has insufficient valid time points")
 
     # Reset start time and interpolate to 100 points.
@@ -138,25 +140,37 @@ def SBI_inference(model, voltage, time):
 
     # Sample the posterior conditioned on the observation.
     with torch.no_grad():
-        samples = model["posterior"].sample(
-            (50000,),
-            x=x,
-            show_progress_bars=False,
-            reject_outside_prior=False,
-        ).cpu()
+        samples = None
+
+        for attempt in range(5):
+            try:
+                with torch.no_grad():
+                    samples = model["posterior"].sample(
+                        (n_samples,),
+                        x=x,
+                        show_progress_bars=False,
+                        reject_outside_prior=False,
+                    )
+                break
+
+            except AssertionError:
+                print(f"NSF numerical failure, retry {attempt + 1}/5")
+
+        if samples is None:
+            raise RuntimeError("NSF sampling failed after 5 attempts")
 
     low = model["prior_min"]
     high = low + model["prior_range"]
 
     inside = ((samples >= low) & (samples <= high)).all(dim=1)
 
-    print(f"Fraction inside prior: {inside.float().mean():.4%}")
+    # print(f"Fraction inside prior: {inside.float().mean():.4%}")
 
-    for name, fraction in zip(
-        model["param_names"],
-        ((samples >= low) & (samples <= high)).float().mean(dim=0),
-    ):
-        print(f"{name}: {fraction:.2%}")
+    # for name, fraction in zip(
+    #     model["param_names"],
+    #     ((samples >= low) & (samples <= high)).float().mean(dim=0),
+    # ):
+    #     print(f"{name}: {fraction:.2%}")
     # Posterior mean in the original parameter space
     theta_mean = samples.mean(dim=0)
 
@@ -184,6 +198,7 @@ def run_inference_efc0(df, models, curve_type):
 
     for cell_id in unique_cell_ids:
         chemistry = get_chemistry(str(cell_id))
+
 
         cell_data = df[df["cell_id"] == cell_id]
         voltage_curve = cell_data["early_curve"].to_numpy()
@@ -221,9 +236,73 @@ def run_inference_efc0(df, models, curve_type):
     return pd.DataFrame(results)
 
 
-if __name__ == "__main__":
-    torch.manual_seed(0)
 
+def run_inference_efc50(df, models, curve_type):
+    results = []
+    unique_cell_ids = df["cell_id"].drop_duplicates().tolist()
+
+    for cell_id in unique_cell_ids:
+        chemistry = get_chemistry(str(cell_id))
+
+
+
+        cell_data = df[df["cell_id"] == cell_id]
+        lower_voltage_curve = cell_data["lower_curve"].to_numpy()
+        lower_time_curve = cell_data["lower_curve_time"].to_numpy()
+        upper_voltage_curve = cell_data["upper_curve"].to_numpy()
+        upper_time_curve = cell_data["upper_curve_time"].to_numpy()
+
+        # The weight is stored per cell; use the first value after filtering
+        # because all rows belonging to a cell should have the same weight.
+        weight = float(cell_data["weight"].iloc[0])
+        if not 0.0 <= weight <= 1.0:
+            raise ValueError(f"Weight for {cell_id} must be between 0 and 1")
+
+        if chemistry not in models:
+            print(f"Skipping {cell_id}: no matching SBI")
+            continue
+
+        try:
+            print(f"Running inference for {cell_id}, chemistry={chemistry}")
+            lower_normalized, lower_physical = SBI_inference(
+                models[chemistry],
+                lower_voltage_curve,
+                lower_time_curve,
+            )
+            upper_normalized, upper_physical = SBI_inference(
+                models[chemistry],
+                upper_voltage_curve,
+                upper_time_curve,
+            )
+            
+            normalized = lower_normalized * (1-weight) + upper_normalized*weight
+            physical = lower_physical * (1-weight) + upper_physical * weight
+        except (ValueError, RuntimeError) as exc:
+            print(f"Skipping {cell_id}: {exc}")
+            continue
+
+        row = {
+            "cell_id": cell_id,
+            "chemistry": chemistry,
+            "curve_type": curve_type,
+        }
+
+        names = models[chemistry]["param_names"]
+
+        for name, norm_value, physical_value in zip(
+            names, normalized, physical
+        ):
+            row[f"{name}_normalized"] = norm_value
+            row[f"{name}_physical"] = physical_value
+
+        results.append(row)
+
+    return pd.DataFrame(results)
+
+
+if __name__ == "__main__":
+    torch.manual_seed(1)
+    print("loading SBIs")
     models = load_all_SBI()
 
     efc0 = pd.read_csv(
@@ -234,8 +313,13 @@ if __name__ == "__main__":
     )
     print("Attempting inference")
     early_results = run_inference_efc0(efc0, models, "efc0")
-    late_results = run_inference(efc50, models, "efc50")
+    print(early_results)
+    print("Infernce for efc0 completed, starting efc50")
+    late_results = run_inference_efc50(efc50, models, "efc50")
+    print("Inference for efc50 completed")
 
+    print(f"Unique early result IDs: {early_results['cell_id'].nunique()}")
+    
     results = pd.concat(
         [early_results, late_results], ignore_index=True
     )

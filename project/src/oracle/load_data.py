@@ -28,6 +28,8 @@ def get_source(cell_id):
         return "tum"
     if cell_id.startswith("cmu_"):
         return "cmu"
+    if cell_id.startswith("elt_"):
+        return "elt"
 
     return None
 
@@ -52,10 +54,14 @@ print(efc50.head())
 
 print("efc0 header", efc0.columns.tolist())
 
+print('efc0.head() for source_dataset = "tum":')
+print(efc0.loc[efc0["source_dataset"] == "tum"].head())
+
+
 
 
 out_dir = Path("project/reports/figures/oracle_testing")
-cell_indices = [0, 10, 20, 30, 40, 50, 60, 65, 70]
+cell_indices = [5, 10, 15, 20, 25, 30, 35, 40, 45]
 cell_ids = efc0["cell_id"].drop_duplicates().iloc[cell_indices]
 
 fig, axes = plt.subplots(3, 3, figsize=(12, 8))
