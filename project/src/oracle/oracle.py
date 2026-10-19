@@ -14,14 +14,22 @@ import joblib
 
 
 
-DATA_ROOT = Path("work3/claho/battery_data/processed")
+DATA_ROOT = Path("work3/s214728/battery_predictions/models/SBI_models")
+METADATA_ROOT = Path("work3/claho/battery_data/processed/")
 OUT_DIR = Path("work3/claho/battery_models/oracle/")
 
-def load_metadata():
-    return
+def load_metadata(filename: str = "public_cell_metadata_cleaned.csv"):
+    df = pd.read_csv(METADATA_ROOT / filename)
+    cyc_cond = df["operational_cluster"]
 
-def load_feature_data():
-    return
+    out = pd.DataFrame({"cell_id": df["cell_id"], "group_id": pd.factorize(df["operational_cluster"])[0]})
+    out[["temp", "Chrg-rate", "Dchrg-rate"]] = pd.DataFrame(df["operational_cluster"].tolist(),index=df.index)
+
+    return out
+
+def load_feature_data(filename: str = "experimental_inference.csv"):
+    df = pd.read_csv(DATA_ROOT / filename)
+    return df
 
 def train_oracle(metadata_train: pd.DataFrame, 
                  feature_data_train: pd.DataFrame,  
@@ -40,7 +48,7 @@ def train_oracle(metadata_train: pd.DataFrame,
     containing a 'cell_id' column, feature columns, and target columns.
 
     Assumes 'meta_data_test/train' contains columns 
-    ["cell_id", "group_id", "temp", "Chrg-rate", "Dchrg-rate]
+    ["cell_id", "group_id", "temp", "Chrg-rate", "Dchrg-rate"]
     
     """
     model_parameters_train = []
@@ -219,10 +227,26 @@ def main():
     """
 
     # 1. Load the data
+    metadata = load_metadata()
+    feature_data = load_feature_data()
+
+    #Split into test and train (80% train 20% test)
+    metadata_train = metadata.sample(frac=0.8, random_state=42)
+    metadata_test = metadata.loc[~metadata.index.isin(metadata_train.index)]
+
+    # Use same samples for feature data
+    feature_data_train = feature_data.loc[metadata.index.isin(metadata_train.index)]
+    feature_data_test = feature_data.loc[~metadata.index.isin(metadata_train.index)]
 
 
 
     # 2. Run the training loop
+    train_oracle(metadata_train
+                 feature_data_train 
+                 metadata_test 
+                 feature_data_test 
+                 num_features = 28
+                )
 
 
     return 

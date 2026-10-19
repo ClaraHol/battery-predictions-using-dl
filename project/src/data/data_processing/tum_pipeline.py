@@ -1,12 +1,12 @@
 
 """
 VTC5a -> existing pipeline (replaces parse_vtc5a + the vtc5a branch of process_cell).
- 
+
 Needs (same folder / on PYTHONPATH):
   build_cell_csvs.py   (loader helpers)
   config_and_cleaning  (your build_cell_record)
 and the per-cell summaries written by build_cell_csvs.py (SUMMARY_DIR).
- 
+
 Usage:
     idx = build_index("/path/to/dataset_root")          # once, scans all .mat files
     meta, efc0_df, efc50_df = process_cell_vtc5a("BW-VTC-164", idx)
@@ -14,15 +14,16 @@ Usage:
 import re
 from collections import defaultdict
 from pathlib import Path
- 
+
 import numpy as np
 import pandas as pd
- 
+
 from tum_processing import load_fields, to_hours, I_THR, C_NOM
+
  
-SUMMARY_DIR = Path("/work3/claho/battery_datasets/sony_vtc5a/summaries")   # <- output folder of build_cell_csvs.py
- 
- 
+SUMMARY_DIR = Path("/work3/claho/battery_datasets/sony_vtc5a/processed_new")         # <- output folder of build_cell_csvs.py
+
+
 # ------------------------------------------------------------------ file index
 def build_index(root):
     """idx[cell_num]['cu' | 'cyc'][interval_no] -> sorted list of .mat paths."""
@@ -39,36 +40,59 @@ def build_index(root):
         else:
             idx[cell]["cyc"][int(m_cy.group(1))].append(f)
     return idx
- 
- 
+
+
 def _num(cell_id):
     return int(re.search(r"(\d+)", str(cell_id)).group(1))
- 
- 
+
+
 def _summary(cell_id, summary_dir=SUMMARY_DIR):
     return pd.read_csv(Path(summary_dir) / f"BW-VTC-{_num(cell_id):03d}.csv")
- 
- 
+
+
 # ------------------------------------------------------------------ EFC scan
 def _make_cref(summary):
     """C_new for interval k = capacity at the last check-up before k (paper definition)."""
     caps = {int(r.CU): r.capacity_Ah for r in summary.itertuples() if pd.notna(r.capacity_Ah)}
     keys = sorted(caps)
- 
+
     def cref(k):
         prev = [m for m in keys if m < k]
         if prev:
             return caps[prev[-1]]
         return caps[keys[0]] if keys else C_NOM
     return cref
- 
- 
+
+
+MIN_CHARGE_H, MIN_CHARGE_AH = 0.1, 0.25      # a "charge" = sustained positive current (not regen pulses)
+
+
+def _charge_mask(d):
+    """Boolean mask of rows belonging to a charging phase.
+    With Command: Command == 'Charge'. Without it (dynamic cells 447-458): runs of I > I_THR
+    lasting >= MIN_CHARGE_H hours AND >= MIN_CHARGE_AH Ah, which excludes regenerative pulses."""
+    if "Command" in d:
+        return d["Command"] == "Charge"
+    t, I = d["Time"], d["I"]
+    n = len(I)
+    pos = I > I_THR
+    edge = np.flatnonzero(np.diff(np.r_[False, pos, False].astype(int)))
+    s, e = edge[::2], edge[1::2]
+    dq0 = np.r_[0.0, np.cumsum(np.where(pos, I * np.r_[np.clip(np.diff(t), 0, None), 0.0], 0.0))]
+    ah = dq0[e] - dq0[s]
+    dur = t[np.minimum(e, n - 1)] - t[s]
+    mask = np.zeros(n, bool)
+    for a, b in zip(s[(dur >= MIN_CHARGE_H) & (ah >= MIN_CHARGE_AH)], e[(dur >= MIN_CHARGE_H) & (ah >= MIN_CHARGE_AH)]):
+        mask[a:b] = True
+    return mask
+
+
 def _load(path):
     d = load_fields(path, ["Time", "U", "I", "T1", "Command"])
     d["Time"], _ = to_hours(d["Time"])                     # -> hours
     return d
- 
- 
+
+
 def _segment(d, carry, cref):
     """Split one file into charge-started cycles. Returns (cycles, carry_out).
     A cycle starts where Command switches into 'Charge' and ends at the next such start.
@@ -77,14 +101,14 @@ def _segment(d, carry, cref):
     dt_next = np.r_[np.clip(np.diff(t), 0, None), 0.0]     # I[k] is held until t[k+1]
     dq = np.where(I > I_THR, I * dt_next, 0.0)
     cs = np.cumsum(dq)
-    ch = d["Command"] == "Charge"
+    ch = _charge_mask(d)
     starts = np.flatnonzero(ch & ~np.r_[False, ch[:-1]])
     ends = np.r_[starts[1:], len(t)]
     cycles = [dict(efc=carry + (cs[s - 1] if s > 0 else 0.0) / cref, s=int(s), e=int(e))
               for s, e in zip(starts, ends)]
     return cycles, carry + cs[-1] / cref
- 
- 
+
+
 def _scan(cyc_files, cref, stop_efc):
     """Walk cycling files in chronological order, collect (efc, file, rows) of every cycle
     until EFC exceeds stop_efc. Only the small per-cycle bookkeeping is kept."""
@@ -99,8 +123,8 @@ def _scan(cyc_files, cref, stop_efc):
         if carry > stop_efc:
             break
     return cands
- 
- 
+
+
 def _cycle_frame(c, cell_id):
     """Standard-schema DataFrame for one cycle (+EFC, cell_id)."""
     d = _load(c["path"])
@@ -117,15 +141,18 @@ def _cycle_frame(c, cell_id):
         "charge_capacity_Ah": np.cumsum(np.where(I > 0, dq, 0.0)),
         "discharge_capacity_Ah": np.cumsum(np.where(I < 0, -dq, 0.0)),
     })
+    out["charge_block"] = _charge_mask(d)[s:e]      # True only in the real charging phase
     out["EFC"] = c["efc"]
     out["cell_id"] = cell_id
     return out
- 
- 
+
+
 def _charging_curve(df):
-    return df[df["current_A"] > 0].copy().reset_index(drop=True)
- 
- 
+    """Charging phase only. Uses charge_block (not current > 0, which would also pick up
+    regenerative braking pulses in the dynamic cells)."""
+    return df[df["charge_block"]].copy().reset_index(drop=True)
+
+
 def vtc5a_curves(cell_id, idx, summary_dir=SUMMARY_DIR, efc_early=0.0, efc_late=50.0):
     """(efc_early_df, efc_late_df) in the same formats process_cell returns.
     early: full cycle (all rows) closest to efc_early.
@@ -140,12 +167,14 @@ def vtc5a_curves(cell_id, idx, summary_dir=SUMMARY_DIR, efc_early=0.0, efc_late=
         return None, None
     efcs = np.array([c["efc"] for c in cands])
     cid = str(cell_id)
- 
+
     early = None
-    if efc_early >= efcs.min() - 1e-9:
-        v = _charging_curve(_cycle_frame(cands[int(np.abs(efcs - efc_early).argmin())], cid))["voltage_V"]
-        early = pd.DataFrame({"early_curve": v})
- 
+    if efcs.min() <= efc_early + 1.0:   
+        curve = _charging_curve(_cycle_frame(cands[int(np.abs(efcs - efc_early).argmin())], cid))
+        v = curve["voltage_V"]                 # a cycle within 1 EFC of the target exists
+        vt = curve["time_s"]
+        early = early = pd.DataFrame({"time_s": vt, "early_curve": v})
+
     late = None
     if efc_late <= efcs.max():
         i = int(np.abs(efcs - efc_late).argmin())
@@ -162,11 +191,9 @@ def vtc5a_curves(cell_id, idx, summary_dir=SUMMARY_DIR, efc_early=0.0, efc_late=
             v = _charging_curve(_cycle_frame(cands[i], cid))["voltage_V"]
             vt = _charging_curve(_cycle_frame(cands[i], cid))["time_s"]
             late = pd.DataFrame({"lower_curve_time": vt, "upper_curve_time": vt, "lower_curve": v, "upper_curve": v, "weight": 1})
-    else:
-        print(f"{cell_id} - Missing efc 50 (max efc = {efcs.max()})")
     return early, late
- 
- 
+
+
 # ------------------------------------------------------------------ metadata
 def vtc5a_cycle_life(cell_id, soh=0.9, summary_dir=SUMMARY_DIR):
     s = _summary(cell_id, summary_dir)
@@ -174,18 +201,18 @@ def vtc5a_cycle_life(cell_id, soh=0.9, summary_dir=SUMMARY_DIR):
     censored = bool(np.isnan(life))
     if censored:                                            # right-censored: last observed EFC
         life = float(s["EFC"].max())
-    return {"cycle_life": life, "censored": censored, "n_full_cycles": float(s["EFC"].max())}
- 
- 
+    return {"cycle_life": life, "censored": censored, "n_full_cycles": int(len(s))}
+
+
 def process_cell_vtc5a(cell_id, idx, summary_dir=SUMMARY_DIR, soh=0.9,
                        efc_early=0.0, efc_late=50.0):
     """Same return as process_cell: (metadata_dict, efc_early_df, efc_late_df)."""
     from config_and_cleaning import build_cell_record
- 
+
     s = _summary(cell_id, summary_dir)
     r = s.iloc[0]
     life = vtc5a_cycle_life(cell_id, soh, summary_dir)
- 
+
     num = lambda v: None if pd.isna(pd.to_numeric(v, errors="coerce")) else float(v)
     ch_nom, dis_nom = num(r.get("C_ch_nominal")), num(r.get("C_dis_nominal"))
     ch_data, dis_data = num(r["mean_C_ch_measured"]), num(r["mean_C_dis_measured"])
@@ -193,9 +220,9 @@ def process_cell_vtc5a(cell_id, idx, summary_dir=SUMMARY_DIR, soh=0.9,
     discharge_c = dis_nom if dis_nom is not None else dis_data
     temp_C = num(r.get("T_ambient_C"))
     temp_C = temp_C if temp_C is not None else float(r["mean_T_surface_C"])
- 
+
     meta = build_cell_record(
-        cell_id="tum_" + str(cell_id), source_dataset="tum", temp_C_raw=temp_C,
+        cell_id=str(cell_id), source_dataset="tum", temp_C_raw=temp_C,
         charge_c_rate_raw=charge_c, discharge_c_rate_raw=discharge_c,
         cycle_life=life["cycle_life"],
         initial_discharge_capacity_Ah=float(s["capacity_Ah"].dropna().iloc[0]),
@@ -211,3 +238,6 @@ def process_cell_vtc5a(cell_id, idx, summary_dir=SUMMARY_DIR, soh=0.9,
     })
     early, late = vtc5a_curves(cell_id, idx, summary_dir, efc_early, efc_late)
     return meta, early, late
+
+
+

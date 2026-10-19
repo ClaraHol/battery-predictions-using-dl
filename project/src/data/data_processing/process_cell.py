@@ -22,22 +22,17 @@ def process_cell(df: pd.DataFrame, cell_id: str, source_dataset: str,
     df: standard-schema DataFrame for one cell (see parsers.py STANDARD_COLUMNS)
     Returns (metadata_dict, efc_early_df, efc_late_df)
 
-    efc_early / efc_late: the exact cycle_number values to extract voltage
-    curves for. NOT assumed to be the dataset's first cycle - some sources
-    are 0-indexed (first real cycle = 0) and some may start at 1, so pass
-    whatever your data actually uses. Either curve is None if that cycle
-    number isn't present for this cell (e.g. it died before reaching 50 -
-    the metadata row is still kept, just without that snapshot).
+    efc_early / efc_late: the exact cycle_number values to extract voltage curves for. 
+    Either curve is None if that cycle number isn't present for this cell 
+    (e.g. it died before reaching 50 - the metadata row is still kept, just without that snapshot).
 
-    Curves are NOT forced to equal length - each is just every row in df
-    matching that cycle_number, whatever length that turns out to be.
+    Curves are NOT forced to equal length - each is just every row in df matching that cycle_number
     """
     from config_and_cleaning import NOMINAL_CAPACITY_AH
 
     nominal_cap = NOMINAL_CAPACITY_AH[source_dataset]
 
-    # --- cycle life: first cycle where per-cycle discharge capacity drops
-    # to 90% of the initial cycle's discharge capacity ---
+    # cycle life: first cycle where per-cycle discharge capacity drops to 90% of the initial cycle's discharge capacity
     per_cycle_discharge_cap = df.groupby("cycle_number")["discharge_capacity_Ah"].max()
     df = calculate_efc(df, nominal_cap, cell_id=source_dataset)
     
@@ -52,12 +47,9 @@ def process_cell(df: pd.DataFrame, cell_id: str, source_dataset: str,
         life = compute_cycle_life_efc(df, per_cycle_discharge_cap, nominal_cap, efc_by_cycle=efc_by_cycle)
     
 
-    # --- charge/discharge C-rate: mean over the whole cell's history.
-    # (The protocol is fixed per cell across its life for these datasets,
-    # so this is equivalent to computing it from efc0 alone, but averaging
-    # over everything is more robust to a noisy first cycle.) ---
-    # --- C-rates: constant-current estimate from the data (time-weighted
-    # mode per cycle), overridden by filename values when supplied ---
+    # charge/discharge C-rate: mean over the whole cell's history. 
+    # C-rates: constant-current estimate from the data (time-weighted mode per cycle), 
+    #          overridden by filename values when supplied 
     charge_c_data = compute_cc_c_rate(df, nominal_cap, "charge")
     discharge_c_data = compute_cc_c_rate(df, nominal_cap, "discharge")
     charge_c = charge_c_rate_override if charge_c_rate_override is not None else charge_c_data
@@ -90,10 +82,9 @@ def process_cell(df: pd.DataFrame, cell_id: str, source_dataset: str,
             or (discharge_c_rate_override is not None and _mismatch(discharge_c_rate_override, discharge_c_data))
         ),
     })
- 
 
     efcs = df["EFC"].dropna().drop_duplicates()
-    #print(efcs)
+
     weight = 1
     if efc_early >= efcs.min():
         efc_idx =(efcs - efc_early).abs().idxmin()
@@ -143,36 +134,32 @@ def process_cell(df: pd.DataFrame, cell_id: str, source_dataset: str,
 
     return metadata, efc_early_df, efc_late_df
 
-def extract_charging_curve(efc_df: pd.DataFrame, has_current: bool = True):
+def extract_charging_curve(efc_df: pd.DataFrame):
     """
-    Isolates just the charging portion of one efc, for the 'interpreter'
-    (which per clarification only needs the charging voltage curve, not
-    the full charge+discharge+rest curve).
-
-    has_current: set False for sources with no current_A column at all
-    (currently just SNL's voltage_timeseries_all_cells.csv export) - in
-    that case this returns the WHOLE efc unsegmented (charge+discharge
-    mixed together), since there's no way to isolate charging without a
-    current sign to filter on. Check has_current downstream before
-    treating the result as "charging only".
-
+    Isolates just the charging portion of one efc, for the 'interpreter'.
     Returns None if efc_number isn't present in df.
     """
     if len(efc_df) == 0:
         return None
-    if not has_current:
-        return efc_df.copy()
-    tbl, d = charge_segments(efc_df)
+    tbl, d = charge_segments(efc_df, i_thresh_A=0.1)
     first_seg_id = tbl.index[0]
     first_charge_curve = d[d["_seg"] == first_seg_id]
     return first_charge_curve
 
 
-def charge_segments(df, i_thresh_A=0.05, min_rows=20):
+def charge_segments(df, i_thresh_A=0.05, v_thresh = -0.01, min_rows=20):
     """Table of charge segments in FILE order (no sorting): EFC at segment start, plus the rows."""
+    v = df["voltage_V"].to_numpy(float)
+    vol = np.diff(np.r_[v, v[-1]]) > v_thresh # Remove big voltage drops
     chg = (df["current_A"].to_numpy(float) > i_thresh_A)
-    seg = np.cumsum(np.r_[True, chg[1:] != chg[:-1]])
-    d = df.loc[chg].assign(_seg=seg[chg])
+    
+    # Both conditions must hold
+    mask = chg & vol
+
+    # Segment whenever the combined condition changes
+    seg = np.cumsum(np.r_[True, mask[1:] != mask[:-1]])
+    d = df.loc[mask].copy()
+    d = df.loc[mask].assign(_seg=seg[mask])
     tbl = d.groupby("_seg").agg(efc=("EFC", "first"), n=("EFC", "size"))
     tbl = tbl[tbl["n"] >= min_rows]
     return tbl, d

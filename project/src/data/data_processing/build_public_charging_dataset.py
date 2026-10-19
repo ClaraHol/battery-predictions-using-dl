@@ -34,7 +34,6 @@ Usage:
 (reads from DATA_ROOT, same layout as build_dataset.py)
 """
 
-import numpy as np
 import traceback
 from pathlib import Path
 
@@ -48,7 +47,7 @@ from snl_processing import process_snl
 from tum_pipeline import build_index, process_cell_vtc5a 
 from tum_processing import read_overview
 from process_cell import process_cell
-from config_and_cleaning import apply_three_step_cleaning, build_cell_record, calculate_efc, find_capacity_checks, NOMINAL_CAPACITY_AH
+from config_and_cleaning import apply_three_step_cleaning
 
 DATA_ROOT = Path(f"/work3/claho/battery_datasets")
 OUTPUT_DIR = Path(f"/work3/claho/battery_datasets/processed")

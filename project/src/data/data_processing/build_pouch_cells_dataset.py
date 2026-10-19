@@ -137,23 +137,23 @@ def main(raw_dir: str):
     )
 
     if rpt0_frames:
-        pd.concat(rpt0_frames, ignore_index=True).to_parquet(
-            OUTPUT_DIR / "pouch_cells_rpt0_curves.parquet", index=False
+        pd.concat(rpt0_frames, ignore_index=True).to_csv(
+            OUTPUT_DIR / "pouch_cells_rpt0_curves.csv", index=False
         )
-        print(f"RPT0 curves -> {OUTPUT_DIR / 'pouch_cells_rpt0_curves.parquet'}")
+        print(f"RPT0 curves -> {OUTPUT_DIR / 'pouch_cells_rpt0_curves.csv'}")
     if efc50_before_frames:
-        pd.concat(efc50_before_frames, ignore_index=True).to_parquet(
-            OUTPUT_DIR / "pouch_cells_efc50_before_curves.parquet", index=False
+        pd.concat(efc50_before_frames, ignore_index=True).to_csv(
+            OUTPUT_DIR / "pouch_cells_efc50_before_curves.csv", index=False
         )
         print(
-            f"EFC{TARGET_EFC}-before curves -> {OUTPUT_DIR / 'pouch_cells_efc50_before_curves.parquet'}"
+            f"EFC{TARGET_EFC}-before curves -> {OUTPUT_DIR / 'pouch_cells_efc50_before_curves.csv'}"
         )
     if efc50_after_frames:
-        pd.concat(efc50_after_frames, ignore_index=True).to_parquet(
-            OUTPUT_DIR / "pouch_cells_efc50_after_curves.parquet", index=False
+        pd.concat(efc50_after_frames, ignore_index=True).to_csv(
+            OUTPUT_DIR / "pouch_cells_efc50_after_curves.csv", index=False
         )
         print(
-            f"EFC{TARGET_EFC}-after curves -> {OUTPUT_DIR / 'pouch_cells_efc50_after_curves.parquet'}"
+            f"EFC{TARGET_EFC}-after curves -> {OUTPUT_DIR / 'pouch_cells_efc50_after_curves.csv'}"
         )
 
 
