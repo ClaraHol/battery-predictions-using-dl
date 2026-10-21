@@ -1,5 +1,6 @@
 import pandas as pd
 import matplotlib.pyplot as plt
+import random
 from pathlib import Path
 
 data_dir = "/work3/claho/battery_datasets/processed/"
@@ -28,6 +29,8 @@ def get_source(cell_id):
         return "tum"
     if cell_id.startswith("cmu_"):
         return "cmu"
+    if cell_id.startswith("elt_"):
+        return "elt"
 
     return None
 
@@ -52,10 +55,17 @@ print(efc50.head())
 
 print("efc0 header", efc0.columns.tolist())
 
+print('efc0.head() for source_dataset = "tum":')
+print(efc0.loc[efc0["source_dataset"] == "tum"].head())
+
+
 
 
 out_dir = Path("project/reports/figures/oracle_testing")
-cell_indices = [0, 10, 20, 30, 40, 50, 60, 65, 70]
+out_dir.mkdir(parents=True, exist_ok=True)
+cell_indices = random.sample(
+    range(efc0["cell_id"].drop_duplicates().shape[0]), 9
+)
 cell_ids = efc0["cell_id"].drop_duplicates().iloc[cell_indices]
 
 fig, axes = plt.subplots(3, 3, figsize=(12, 8))
@@ -79,4 +89,27 @@ for ax, cell_id in zip(axes.flat, cell_ids):
 fig.tight_layout()
 fig.savefig(out_dir / "lower_curves_efc50_cells.png")
 plt.close(fig)
+
+
+selected_cell_ids = [
+    "tum_BW-VTC-234",
+    "tum_BW-VTC-221",
+    "tum_BW-VTC-431",
+    "snl_nmc_SNL_18650_NMC_25C_0-100_0.5/2C_b",
+]
+
+fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+for ax, cell_id in zip(axes.flat, selected_cell_ids):
+    cell_data = efc50[efc50["cell_id"] == cell_id]
+    voltage = cell_data["lower_curve"].to_numpy()
+    time = cell_data["lower_curve_time"].to_numpy()
+    ax.plot(time, voltage)
+    ax.set_xlabel("Time (sample)")
+    ax.set_ylabel("Voltage")
+    ax.set_title(f"Voltage over time for {cell_id}")
+    ax.grid(True)
+fig.tight_layout()
+fig.savefig(out_dir / "time_voltage_selected_cells.png")
+plt.close(fig)
+
 
