@@ -144,8 +144,54 @@ def extract_charging_curve(efc_df: pd.DataFrame):
     tbl, d = charge_segments(efc_df, i_thresh_A=0.1)
     first_seg_id = tbl.index[0]
     first_charge_curve = d[d["_seg"] == first_seg_id]
+    first_charge_curve = remove_cv_phase(first_charge_curve)
     return first_charge_curve
 
+def remove_cv_phase(df, voltage_tol=0.005, window=15):
+    """
+    Truncate charging curve at the beginning of the
+    sustained upper-voltage plateau.
+    """
+
+    if len(df) < window:
+        return df.copy()
+
+    v = df["voltage_V"].to_numpy(dtype=float)
+
+    # Smooth voltage
+    v_smooth = (
+        pd.Series(v)
+        .rolling(5, center=True, min_periods=1)
+        .median()
+        .to_numpy()
+    )
+
+    # Approximate maximum voltage
+    v_max = np.max(v_smooth)
+
+    # Detect a nearly constant voltage window
+    voltage_range = (
+        pd.Series(v_smooth).rolling(window).max()
+        - pd.Series(v_smooth).rolling(window).min()
+    ).to_numpy()
+
+    plateau = (
+        (voltage_range < voltage_tol)
+        & (v_smooth >= v_max - voltage_tol)
+    )
+
+    indices = np.flatnonzero(plateau)
+
+    if len(indices) == 0:
+        return df.copy()
+
+    cutoff = indices[0] - window + 1
+
+    # Avoid returning an empty curve
+    if cutoff < 20:
+        return df.copy()
+
+    return df.iloc[:cutoff].copy().reset_index(drop=True)
 
 def charge_segments(df, i_thresh_A=0.05, v_thresh = -0.01, min_rows=20):
     """Table of charge segments in FILE order (no sorting): EFC at segment start, plus the rows."""

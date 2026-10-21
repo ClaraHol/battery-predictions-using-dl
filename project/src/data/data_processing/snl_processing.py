@@ -138,4 +138,4 @@ def process_snl(info, snl_meta_data, cell_id, efc_early = 1, efc_late = 50, char
     efc_late_df = extract_efc_late(info, efcs, efc_late, cell_id)
 
   
-    return metadata, efc_early_df, efc_late_df
+    return metadata, efc_early_df, efc_late_df, full_cell_id

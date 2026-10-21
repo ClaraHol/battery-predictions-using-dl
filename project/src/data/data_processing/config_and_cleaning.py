@@ -455,6 +455,7 @@ def apply_three_step_cleaning(
     df["operational_cluster"] = list(
         zip(df["temp_C"], df["charge_c_rate"], df["discharge_c_rate"])
     )
+    df_all_clusters = df.copy()
     cluster_sizes = df["operational_cluster"].value_counts()
     small_clusters = cluster_sizes[cluster_sizes <= MIN_CLUSTER_SIZE].index
     df = df[~df["operational_cluster"].isin(small_clusters)]
@@ -468,4 +469,4 @@ def apply_three_step_cleaning(
         )
         print(f"Surviving operational clusters: {df['operational_cluster'].nunique()}")
 
-    return df.reset_index(drop=True)
+    return df.reset_index(drop=True), df_all_clusters.reset_index(drop=True)

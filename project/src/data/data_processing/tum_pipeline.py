@@ -146,11 +146,57 @@ def _cycle_frame(c, cell_id):
     out["cell_id"] = cell_id
     return out
 
+def remove_cv_phase(df, voltage_tol=0.005, window=15):
+    """
+    Truncate charging curve at the beginning of the
+    sustained upper-voltage plateau.
+    """
+
+    if len(df) < window:
+        return df.copy()
+
+    v = df["voltage_V"].to_numpy(dtype=float)
+
+    # Smooth voltage
+    v_smooth = (
+        pd.Series(v)
+        .rolling(5, center=True, min_periods=1)
+        .median()
+        .to_numpy()
+    )
+
+    # Approximate maximum voltage
+    v_max = np.max(v_smooth)
+
+    # Detect a nearly constant voltage window
+    voltage_range = (
+        pd.Series(v_smooth).rolling(window).max()
+        - pd.Series(v_smooth).rolling(window).min()
+    ).to_numpy()
+
+    plateau = (
+        (voltage_range < voltage_tol)
+        & (v_smooth >= v_max - voltage_tol)
+    )
+
+    indices = np.flatnonzero(plateau)
+
+    if len(indices) == 0:
+        return df.copy()
+
+    cutoff = indices[0] - window + 1
+
+    # Avoid returning an empty curve
+    if cutoff < 20:
+        return df.copy()
+
+    return df.iloc[:cutoff].copy().reset_index(drop=True)
 
 def _charging_curve(df):
     """Charging phase only. Uses charge_block (not current > 0, which would also pick up
     regenerative braking pulses in the dynamic cells)."""
-    return df[df["charge_block"]].copy().reset_index(drop=True)
+    out = remove_cv_phase(df[df["charge_block"]].copy().reset_index(drop=True))
+    return out
 
 
 def vtc5a_curves(cell_id, idx, summary_dir=SUMMARY_DIR, efc_early=0.0, efc_late=50.0):
@@ -222,7 +268,7 @@ def process_cell_vtc5a(cell_id, idx, summary_dir=SUMMARY_DIR, soh=0.9,
     temp_C = temp_C if temp_C is not None else float(r["mean_T_surface_C"])
 
     meta = build_cell_record(
-        cell_id=str(cell_id), source_dataset="tum", temp_C_raw=temp_C,
+        cell_id="tum_"+str(cell_id), source_dataset="tum", temp_C_raw=temp_C,
         charge_c_rate_raw=charge_c, discharge_c_rate_raw=discharge_c,
         cycle_life=life["cycle_life"],
         initial_discharge_capacity_Ah=float(s["capacity_Ah"].dropna().iloc[0]),

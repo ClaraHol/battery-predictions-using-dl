@@ -131,7 +131,7 @@ def main():
    
     # --- Samsung-25R (Zhu et al.) ---
     tongji_dir = DATA_ROOT / "samsung_25r"
-    tongji_files = list(tongji_dir.glob("**/*.csv"))
+    tongji_files = list(tongji_dir.glob("Dataset_2_NCM_battery/*.csv"))
     print(f"[tongji] found {len(tongji_files)} files")
     for f in tongji_files:
         cell_id = f"tongji_{f.stem}"
@@ -158,10 +158,10 @@ def main():
             snl_cells = parse_snl_voltage_timeseries(f)
             
             for cell_id, info in snl_cells.items():
-                meta, efc_0, efc_50 = process_snl(info, snl_meta_data, cell_id)
+                meta, efc_0, efc_50, full_cell_id = process_snl(info, snl_meta_data, cell_id)
                 metadata_rows.append(meta)
                     
-                add_charging_curves(efc_0, efc_50, cell_id, charging_early_frames, charging_late_frames)    
+                add_charging_curves(efc_0, efc_50, full_cell_id, charging_early_frames, charging_late_frames)    
             
         except Exception as e:
             errors.append((cell_id, "snl", str(e), traceback.format_exc()))
@@ -182,8 +182,9 @@ def main():
         cells_df.to_csv(OUTPUT_DIR / "public_cell_metadata_all.csv", index=False)
         print(f"\nParsed {len(cells_df)} cells -> {OUTPUT_DIR / 'public_cell_metadata_all.csv'}")
 
-        cleaned_df = apply_three_step_cleaning(cells_df)
+        cleaned_df, df_all_groups = apply_three_step_cleaning(cells_df)
         cleaned_df.to_csv(OUTPUT_DIR / "public_cell_metadata_cleaned.csv", index=False)
+        df_all_groups.to_csv(OUTPUT_DIR / "public_cell_metadata_all_groups.csv", index=False)
         print(f"Cleaned (oracle-ready) metadata -> {OUTPUT_DIR / 'public_cell_metadata_cleaned.csv'}")
 
         surviving_ids = set(cleaned_df["cell_id"])

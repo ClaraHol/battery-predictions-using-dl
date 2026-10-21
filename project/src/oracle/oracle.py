@@ -1,3 +1,4 @@
+import ast
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn import linear_model
@@ -13,100 +14,191 @@ import joblib
 
 
 
+INTERPRETER = "MLP"
+DATA_ROOT = Path(f"/work3/s214728/battery-predictions/models/{INTERPRETER}_models")
+METADATA_ROOT = Path("/work3/claho/battery_datasets/processed")
+OUT_DIR = Path(f"work3/claho/battery_models/oracle/{INTERPRETER.lower()}/")
 
-DATA_ROOT = Path("work3/s214728/battery_predictions/models/SBI_models")
-METADATA_ROOT = Path("work3/claho/battery_data/processed/")
-OUT_DIR = Path("work3/claho/battery_models/oracle/")
 
-def load_metadata(filename: str = "public_cell_metadata_cleaned.csv"):
-    df = pd.read_csv(METADATA_ROOT / filename)
-    cyc_cond = df["operational_cluster"]
+def load_metadata(
+    filename: str = "public_cell_metadata_all_groups.csv",
+    filename2: str = "public_cell_metadata_cleaned.csv"
+):
+    # Load metadata
+    df_all = pd.read_csv(METADATA_ROOT / filename)
+    df_cleaned = pd.read_csv(METADATA_ROOT / filename2)  
 
-    out = pd.DataFrame({"cell_id": df["cell_id"], "group_id": pd.factorize(df["operational_cluster"])[0]})
-    out[["temp", "Chrg-rate", "Dchrg-rate"]] = pd.DataFrame(df["operational_cluster"].tolist(),index=df.index)
+    # Generate consistent group IDs
+    df_all["group_id"] = pd.factorize(df_all["operational_cluster"])[0]
 
-    return out
+    # Split into training and testing
+    train_df = df_all[df_all["cell_id"].isin(df_cleaned["cell_id"])].copy()
+    test_df = df_all[~df_all["cell_id"].isin(df_cleaned["cell_id"])].copy()
+
+    # Convert to desired format
+    def prepare_metadata(df):
+        conditions = df["operational_cluster"].apply(ast.literal_eval)
+
+        out = df[["cell_id", "group_id", "cycle_life"]].copy()
+        out[["temp", "Chrg-rate", "Dchrg-rate"]] = pd.DataFrame(conditions.tolist(),index=df.index)
+
+        return out.reset_index(drop=True)
+
+    train = prepare_metadata(train_df)
+    test = prepare_metadata(test_df)
+
+    return train, test
 
 def load_feature_data(filename: str = "experimental_inference.csv"):
     df = pd.read_csv(DATA_ROOT / filename)
-    return df
+    
+    efc0 = df[df["curve_type"] == "efc0"].set_index("cell_id")
+    efc50 = df[df["curve_type"] == "efc50"].set_index("cell_id")
+
+    # Assert that each cell only has 1 efc0 and 1 efc50
+    assert efc0.index.is_unique, "Duplicate cell IDs at EFC 0"
+    assert efc50.index.is_unique, "Duplicate cell IDs at EFC 50"
+
+    # Only extract the physical features not normalized features
+    feature_columns = [f for f in efc0.columns if "physical" in f]
+
+    # Keep only numerical features
+    features = efc0[feature_columns].select_dtypes(include="number").columns
+
+    # Keep only cells with both curves
+    common_ids = efc0.index.intersection(efc50.index)
+
+    # EFC 0 features
+    out = efc0.loc[common_ids, features].copy()
+
+    # Differences
+    diff = (
+        efc50.loc[common_ids, features]
+        - efc0.loc[common_ids, features]
+    ).add_suffix("_diff")
+
+    # Combine
+    out = pd.concat([out, diff], axis=1).reset_index()
+    return out
 
 def train_oracle(metadata_train: pd.DataFrame, 
                  feature_data_train: pd.DataFrame,  
                  metadata_test: pd.DataFrame,  
-                 feature_data_test: pd.DataFrame,  
-                 num_features: int,
+                 feature_data_test: pd.DataFrame,
+                 remove_outliers = False,
                  alpha_sbi = 0.8,
                  C_svr = 1.4,
                  epsilon_f_ope = 0.2,
-                 l1_ratio = 0.8
+                 l1_ratio = 0.8,
+                 
     ):
     """
     Two-stage meta-learning pipeline for battery life prediction.
 
     Assumes `feature_data_train` and `feature_data_test` are DataFrames
-    containing a 'cell_id' column, feature columns, and target columns.
+    containing a 'cell_id' column and feature columns.
 
     Assumes 'meta_data_test/train' contains columns 
-    ["cell_id", "group_id", "temp", "Chrg-rate", "Dchrg-rate"]
+    ["cell_id", "group_id", "temp", "Chrg-rate", "Dchrg-rate", "cycle_life"]
     
     """
-    model_parameters_train = []
-    cell_ids_train = metadata_train['cell_id'].values
     #-------------------------------------------------------------------------------------------------
     # Stage 1: Train an ElasticNet for each cluster (Temp, Chrg-Rate, Dchrg-Rate)
     #-------------------------------------------------------------------------------------------------
+    train_data = metadata_train.merge(
+    feature_data_train,
+    on="cell_id",
+    how="inner",
+    validate="one_to_one"
+    )
 
-    for cell_id in cell_ids_train:
-        # Extract cell feature rows using cell_id
-        feature_data = feature_data_train[feature_data_train['cell_id'] == cell_id]
+    test_data = metadata_test.merge(
+    feature_data_test,
+    on="cell_id",
+    how="inner",
+    validate="one_to_one"
+    )
+    
+    feature_columns = feature_data_train.columns.drop("cell_id").tolist()
 
-        # Extract features (first `num_features` columns) and target (last column)
-        train_features = feature_data.iloc[:, :num_features].to_numpy()
-        train_target = feature_data.iloc[:, -1].to_numpy()  # EFC cycle life target in last column
 
-        #---------------------------------------------------------------------------------------------
-        # Remove uninformative features by setting them to zero
-        #---------------------------------------------------------------------------------------------
-        # 1. Number of features to keep
-        k_value = next(k for cap, k in [(10, 10), (6, 5), (3, 3)] if num_features > cap) or 1
-        
-        # 2. Fit selector & identify kept/dropped features
-        selector = SelectKBest(score_func=mutual_info_regression, k=k_value).fit(train_features, train_target)
+    scaler_features = StandardScaler()
+    scaler_features.fit(train_data[feature_columns])
+
+    train_data[feature_columns] = scaler_features.transform(train_data[feature_columns])
+    test_data[feature_columns] = scaler_features.transform(test_data[feature_columns])
+
+    model_parameters_train = []
+    meta_inputs_train = []
+
+    for group_id, group in train_data.groupby("group_id"):
+
+        train_features = group[feature_columns].to_numpy(dtype=float)
+        train_target = np.log(group["cycle_life"].to_numpy(dtype=float))
+
+        # Feature selection
+        k_value = (
+            10 if train_features.shape[1] > 10
+            else 5 if train_features.shape[1] > 6
+            else 3 if train_features.shape[1] > 3
+            else 1
+        )
+
+        selector = SelectKBest(
+            score_func=mutual_info_regression,
+            k=k_value
+        )
+
+        train_features = selector.fit_transform(
+            train_features, train_target
+        )
+
+
+        # Important: retain original feature dimensions
         keep_mask = selector.get_support()
+        X = group[feature_columns].to_numpy(dtype=float).copy()
+        X[:, ~keep_mask] = 0
 
-        # 3. Create cleaned array (zeros out non-selected features cleanly)
-        train_feature_clean = np.where(keep_mask, train_features, 0)
+        # ElasticNet
+        elasticNet = linear_model.ElasticNet(
+            alpha=alpha_sbi,
+            l1_ratio=l1_ratio,
+            random_state=0
+        )
 
-        #---------------------------------------------------------------------------------------------
-        # Train ElasticNet
-        #---------------------------------------------------------------------------------------------
-        elasticNet = linear_model.ElasticNet(alpha=alpha_sbi, l1_ratio=l1_ratio, random_state=0)
-        elasticNet.fit(train_feature_clean, train_target)
+        elasticNet.fit(X, train_target)
 
-        # Save model parameters
-        coefficients = elasticNet.coef_
-        intercept = elasticNet.intercept_
-        parameter = np.insert(coefficients, 0, intercept)   # [Intercept, coef_1, coef_2, ...]
-        model_parameters_train.append(parameter)
+        parameters = np.insert(elasticNet.coef_, 0, elasticNet.intercept_)
+        model_parameters_train.append(parameters)
+
+        # One operating-condition vector per group
+        meta_inputs_train.append(
+            group[["temp", "Chrg-rate", "Dchrg-rate"]]
+            .iloc[0]
+            .to_numpy(dtype=float)
+        )
+   
 
     #-------------------------------------------------------------------------------------------------
     # Stage 2: Train meta predictor
     #-------------------------------------------------------------------------------------------------
     # Step 1: Convert training and target data to numpy arrays 
-    train_target_svr = np.array(model_parameters_train)
+        # One coefficient vector per operational group
     
-    # Exclude cell_ids and group_id from metadata
-    train_input = metadata_train.drop(columns=["cell_id", "group_id"]).to_numpy() 
-    test_input = metadata_test.drop(columns=["cell_id", "group_id"]).to_numpy()
+    train_target_svr = np.asarray(model_parameters_train, dtype=float)
+    
+    # One row per operational group
+    train_input = np.asarray(meta_inputs_train, dtype=float)
+
     
     # Step 2: Scale and pass to SVR
     scaler_X = StandardScaler()
     scaler_Y = StandardScaler()
 
     X_train = scaler_X.fit_transform(train_input) #shape: (n_cells, 3)
-    X_test = scaler_X.transform(test_input)
     Y_train = scaler_Y.fit_transform(train_target_svr)
+    #print(f"{X_train.shape=}")
+    #print(f"{Y_train.shape=}")
 
 
     # Step 3: Fit SVR meta predictor
@@ -114,6 +206,10 @@ def train_oracle(metadata_train: pd.DataFrame,
     meta_predictor = MultiOutputRegressor(svr)
     meta_predictor.fit(X_train, Y_train)
 
+    # One input row per test cell
+    meta_features = ["temp", "Chrg-rate", "Dchrg-rate"]
+    test_input = metadata_test[meta_features].to_numpy(dtype=float)
+    X_test = scaler_X.transform(test_input)
 
     # Predict parameters using the meta_predictor
     y_pred = meta_predictor.predict(X_test)
@@ -122,41 +218,38 @@ def train_oracle(metadata_train: pd.DataFrame,
     # ---------------------------------------------------------------------------
     # Stage 3: Vectorized Evaluation on Test Data
     # ---------------------------------------------------------------------------
-    test_records = []
 
-    test_cell_ids = feature_data_test["cell_id"].values()
-    for idx, cell_id in enumerate(test_cell_ids):
-        test_features = feature_data_test.loc[[cell_id]].copy()
-        
-        # Extract predicted weights [intercept, coefficients]
-        intercept = model_parameters_test[idx, 0]
-        coef = model_parameters_test[idx, 1:]
+    test_input = test_data[meta_features].to_numpy(dtype=float)
+    X_test = scaler_X.transform(test_input)
+    model_parameters_test = scaler_Y.inverse_transform(meta_predictor.predict(X_test))
+    X_test_features = test_data[feature_columns].to_numpy(dtype=float)
 
-        # Direct matrix multiplication (Vectorized ElasticNet Evaluation)
-        X_test_cell = test_features[:, :num_features].to_numpy()
-        y_pred = np.abs(X_test_cell @ coef + intercept)
+    intercepts = model_parameters_test[:, 0]
+    coefficients = model_parameters_test[:, 1:]
 
-        test_features['predicted_cycle_life'] = y_pred
-        test_features['true_cycle_life'] = test_features.iloc[:, -1].values
-       
-        test_records.append(test_features)
+    assert X_test_features.shape[1] == coefficients.shape[1]
 
-    # Combine all evaluated test data
-    df_eval = pd.concat(test_records, ignore_index=True)
-
-    # Merge absed on group_id
-    df_eval = df_eval.merge(
-        metadata_test[['cell_id', 'group_id']], on='cell_id', how='left'
+    predicted_cycle_life = (
+        np.sum(X_test_features * coefficients, axis=1)
+        + intercepts
     )
+    predicted_cycle_life = np.exp(predicted_cycle_life)
+
+    df_eval = test_data[["cell_id", "group_id", "cycle_life"]].copy()
+    df_eval["predicted_cycle_life"] = predicted_cycle_life
 
     # Calculate Cell-Level Metrics
-    df_eval['loss'] = np.abs(df_eval['true_cycle_life'] - df_eval['predicted_cycle_life']) / df_eval['true_cycle_life']
-    mape = df_eval['loss'].mean()
+    df_eval['loss'] = np.abs(df_eval['cycle_life'] - df_eval['predicted_cycle_life']) / df_eval['cycle_life']
+    if remove_outliers:
+        df_eval = df_eval[df_eval['loss'] < 15]
+    outliers = df_eval[df_eval['loss'] > 1]
+    print(f"Outliers:\n {outliers}")
+    mape = df_eval['loss'].mean() * 100
 
     # Calculate Group-Level Metrics via pandas groupby
-    df_group = df_eval.groupby("group_id")[['true_cycle_life', 'predicted_cycle_life']].mean()
-    df_group['group_loss'] = np.abs(df_group['true_cycle_life'] - df_group['predicted_cycle_life']) / df_group['true_cycle_life']
-    group_mape = df_group['group_loss'].mean()
+    df_group = df_eval.groupby("group_id")[['cycle_life', 'predicted_cycle_life']].mean()
+    df_group['group_loss'] = np.abs(df_group['cycle_life'] - df_group['predicted_cycle_life']) / df_group['cycle_life']
+    group_mape = df_group['group_loss'].mean() * 100
 
 
     # Save models
@@ -173,14 +266,14 @@ def train_oracle(metadata_train: pd.DataFrame,
     # Plot 1: Cell-level error
     axes[0].plot(range(len(df_eval)), df_eval['loss'], color='blue', alpha=0.6)
     axes[0].scatter(range(len(df_eval)), df_eval['loss'], s=5, c='r')
-    axes[0].set_title(f'Cell Loss (MAPE = {mape:.4f})')
+    axes[0].set_title(f'Cell Loss (MAPE = {mape:.4f}%)')
     axes[0].set_ylabel('Absolute Relative Error')
     axes[0].set_xlabel('Sample Index')
 
     # Plot 2: Cell-level Scatter (Predicted vs True)
-    ref = np.linspace(0, max(df_eval['true_cycle_life'].max(), df_eval['predicted_cycle_life'].max()), 100)
+    ref = np.linspace(0, max(df_eval['cycle_life'].max(), df_eval['predicted_cycle_life'].max()), 100)
     axes[1].plot(ref, ref, 'k--')
-    axes[1].scatter(df_eval['predicted_cycle_life'], df_eval['true_cycle_life'], c='r', alpha=0.5, s=10)
+    axes[1].scatter(df_eval['predicted_cycle_life'], df_eval['cycle_life'], c='r', alpha=0.5, s=10)
     axes[1].set_title('Observed vs Predicted EFC')
     axes[1].set_xlabel('Predicted EFC')
     axes[1].set_ylabel('Observed EFC')
@@ -188,7 +281,7 @@ def train_oracle(metadata_train: pd.DataFrame,
     plt.tight_layout()
 
     # Ensure directory exists before saving
-    save_path = Path("project/reports/figures/oracle_training.png")
+    save_path = Path(f"project/reports/figures/oracle/oracle_training_{INTERPRETER.lower()}.png")
     save_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(save_path, dpi=300)
 
@@ -226,27 +319,79 @@ def main():
     Training loop for the oracle
     """
 
+    
+    mlp_filname = "experimental_inference_mlp.csv"
+
+
+
+
+
     # 1. Load the data
-    metadata = load_metadata()
-    feature_data = load_feature_data()
+    metadata_train, metadata_test = load_metadata()
+    if INTERPRETER == "SBI":
+        feature_data = load_feature_data()
+    else:
+        feature_data = load_feature_data(mlp_filname)
 
-    #Split into test and train (80% train 20% test)
-    metadata_train = metadata.sample(frac=0.8, random_state=42)
-    metadata_test = metadata.loc[~metadata.index.isin(metadata_train.index)]
 
-    # Use same samples for feature data
-    feature_data_train = feature_data.loc[metadata.index.isin(metadata_train.index)]
-    feature_data_test = feature_data.loc[~metadata.index.isin(metadata_train.index)]
 
+    # Match metadata and features by cell_id
+    train = metadata_train.merge(
+        feature_data,
+        on="cell_id",
+        how="inner",
+        validate="one_to_one"
+    )
+    test_new = metadata_test.merge(
+        feature_data,
+        on="cell_id",
+        how="inner",
+        validate="one_to_one"
+    )
+
+    # Select one test cell per operational group
+    test = train.groupby("group_id").sample(
+        n=2,
+        random_state=0
+    )
+
+    # Remaining cells for training
+    train = train.drop(test.index)
+
+    # Separate metadata and features
+    meta_columns = [
+        "cell_id", "group_id", "temp",
+        "Chrg-rate", "Dchrg-rate", "cycle_life"
+    ]
+
+    metadata_train = train[meta_columns].copy()
+    metadata_test = test[meta_columns].copy()
+
+    feature_columns = [
+        col for col in feature_data.columns
+        if col != "cell_id"
+    ]
+
+    feature_data_train = train[["cell_id"] + feature_columns].copy()
+    feature_data_test = test[["cell_id"] + feature_columns].copy()
+
+    #print(f"{metadata_train.shape=}")
+    #print(f"{metadata_test.shape=}")
+
+    #print(f"{feature_data_train.shape=}")
+    #print(f"{feature_data_test.shape=}")
+    
 
 
     # 2. Run the training loop
-    train_oracle(metadata_train
-                 feature_data_train 
-                 metadata_test 
-                 feature_data_test 
-                 num_features = 28
+    train_oracle(metadata_train,
+                feature_data_train, 
+                metadata_test, 
+                feature_data_test
                 )
 
 
     return 
+
+if __name__ == "__main__":
+    main()
