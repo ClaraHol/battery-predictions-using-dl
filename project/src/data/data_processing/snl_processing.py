@@ -29,6 +29,8 @@ def extract_efc_late(info, efcs, target, cell_id):
             weight = 1
             lower_curve = info["voltage_curves"][idx]["voltage_V"].to_numpy()
             upper_curve = info["voltage_curves"][idx]["voltage_V"].to_numpy()
+            lower_curve_time = info["voltage_curves"][idx]["time_s"].to_numpy()
+            upper_curve_time = info["voltage_curves"][idx]["time_s"].to_numpy()
 
         else:
             lower_indices = np.where(efcs < target)[0]
@@ -54,6 +56,8 @@ def extract_efc_late(info, efcs, target, cell_id):
 
             lower_curve = info["voltage_curves"][idx_lower]["voltage_V"].to_numpy()
             upper_curve = info["voltage_curves"][idx_upper]["voltage_V"].to_numpy()
+            lower_curve_time = info["voltage_curves"][idx_lower]["time_s"].to_numpy()
+            upper_curve_time = info["voltage_curves"][idx_upper]["time_s"].to_numpy()
 
         # Validate curves
         if lower_curve.ndim != 1 or upper_curve.ndim != 1:
@@ -65,8 +69,8 @@ def extract_efc_late(info, efcs, target, cell_id):
             return None
 
         curve = pd.DataFrame({
-            "lower_curve_time": info["voltage_curves"][idx_lower]["time_s"].to_numpy(),
-            "upper_curve_time": info["voltage_curves"][idx_upper]["time_s"].to_numpy(),
+            "lower_curve_time":lower_curve_time,
+            "upper_curve_time": upper_curve_time,
             "lower_curve": lower_curve,
             "upper_curve": upper_curve,
             "weight": weight

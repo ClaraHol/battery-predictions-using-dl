@@ -407,7 +407,7 @@ def parse_pouch_cells_rpt_curve(parquet_path: str, rpt_number: int, batch_size: 
         "temp_C": raw["temp"],
         "soc": raw["soc"],
         "step_no": raw["step_no"],
-        #"cycle_number": rpt_number,
+        "cycle_number": rpt_number,
     })
     return out
 
@@ -541,17 +541,16 @@ def build_pouch_cells_cell_record(cell_id: str, rpt_metadata: pd.DataFrame, parq
     Leave parquet_path=None to skip EFC computation (e.g. if you only have
     the metadata xlsx for a cell) - RPT-unit fields are still returned.
     """
-    from config_and_cleaning import compute_cycle_life
+    from config_and_cleaning import compute_cycle_life_efc
 
     cap_series = rpt_metadata["discharge_cap"]
-    cycle_life_in_rpt_units = compute_cycle_life(cap_series)
+    life = compute_cycle_life_efc(cap_series)
     nominal_cap = nominal_capacity_Ah if nominal_capacity_Ah is not None else float(cap_series.iloc[0])
 
     record = {
         "cell_id": cell_id,
         "nominal_capacity_Ah": nominal_cap,
-        "cycle_life_rpt_units": cycle_life_in_rpt_units,
-        "cycle_life_efc_units": None,
+        "cycle_life_efc_units": life["cycle_life_efc"],
         "efc50_rpt_before": None,
         "efc50_rpt_after": None,
         "efc50_interp_weight": None,
@@ -559,8 +558,6 @@ def build_pouch_cells_cell_record(cell_id: str, rpt_metadata: pd.DataFrame, parq
 
     if parquet_path is not None:
         efc_per_rpt = compute_efc_per_rpt(parquet_path, nominal_cap)
-        if cycle_life_in_rpt_units in efc_per_rpt.index:
-            record["cycle_life_efc_units"] = float(efc_per_rpt.loc[cycle_life_in_rpt_units])
         rpt_before, rpt_after, weight = find_bracketing_rpts(efc_per_rpt, target_efc)
         record["efc50_rpt_before"] = int(rpt_before)
         record["efc50_rpt_after"] = int(rpt_after)
