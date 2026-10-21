@@ -14,13 +14,14 @@ import numpy as np
 import pandas as pd
 import torch
 from torch import nn
+from derived_features import add_derived_features
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 DATA_DIR = Path("/work3/claho/battery_datasets/processed")
 MODEL_DIR = PROJECT_ROOT / "models" / "MLP_models"
-OUTPUT = MODEL_DIR / "experimental_inference_mlp.csv"
+OUTPUT = PROJECT_ROOT / "models" / "inference_results" / "experimental_inference_mlp.csv"
 DEVICE = torch.device("cpu")
 
 # Chemistry: rated capacity (Ah), reference current (A), voltage limits (V)
@@ -286,10 +287,15 @@ if __name__ == "__main__":
     print("EFC0 inference completed")
     late = run_inference_efc50(efc50, models)
 
+
     results = pd.concat([early, late], ignore_index=True)
+    results = add_derived_features(results)
+
+
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     results.to_csv(OUTPUT, index=False)
     print(f"Saved {len(results)} rows to {OUTPUT}")
+
 
     if not results.empty:
         print(results.groupby(["chemistry", "curve_type"])["cell_id"].nunique())

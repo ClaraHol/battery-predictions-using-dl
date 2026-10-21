@@ -9,12 +9,15 @@ import pandas as pd
 import torch
 from sbi import utils
 from sbi.utils.user_input_checks import process_prior
+from derived_features import add_derived_features
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.append(str(PROJECT_ROOT))
 
 DATA_DIR = Path("/work3/claho/battery_datasets/processed")
 MODEL_DIR = PROJECT_ROOT / "models" / "SBI_models"
+OUTPUT = PROJECT_ROOT / "models" / "inference_results" / "experimental_inference_sbi.csv"
+
 N_SAMPLES = 5000
 
 # Chemistry: (nominal capacity, reference current, lower voltage, upper voltage)
@@ -48,6 +51,34 @@ def get_chemistry(cell_id):
     return None
 
 
+F = 96485.33212  # C/mol
+
+def derived_features(physical, constants, q_charge_ah):
+    theta_n = physical["theta_n_init"]
+    theta_p = physical["theta_p_init"]
+    eps_n = physical["eps_s_n"]
+    eps_p = physical["eps_s_p"]
+
+    L_n = constants["L_n"]
+    L_p = constants["L_p"]
+    A = constants["A"]
+    c_n = constants["c_s_max_n"]
+    c_p = constants["c_s_max_p"]
+
+    Q = q_charge_ah * 3600.0
+
+    theta_h_n = theta_n + Q / (L_n * A * c_n * eps_n * F)
+    theta_h_p = theta_p - Q / (L_p * A * c_p * eps_p * F)
+
+    theta_off = theta_p + theta_n * (
+        L_n * c_n * eps_n / (L_p * c_p * eps_p)
+    )
+
+    return {
+        "theta_h_n": theta_h_n,
+        "theta_h_p": theta_h_p,
+        "theta_off": theta_off,
+    }
 # ============================================================
 # 1. Load all chemistry-specific SBI models
 # ============================================================
@@ -313,20 +344,19 @@ if __name__ == "__main__":
         DATA_DIR / "public_charging_curve_late_all.csv"
     )
     print("Attempting inference")
-    early_results = run_inference_efc0(efc0, models, "efc0")
+    early = run_inference_efc0(efc0, models, "efc0")
     print(early_results)
     print("Infernce for efc0 completed, starting efc50")
-    late_results = run_inference_efc50(efc50, models, "efc50")
+    late = run_inference_efc50(efc50, models, "efc50")
     print("Inference for efc50 completed")
 
     print(f"Unique early result IDs: {early_results['cell_id'].nunique()}")
     
-    results = pd.concat(
-        [early_results, late_results], ignore_index=True
-    )
+    results = pd.concat([early, late], ignore_index=True)
+    results = add_derived_features(results)
 
-    output = MODEL_DIR / "experimental_inference.csv"
-    results.to_csv(output, index=False)
 
-    print(f"\nSaved results: {output}")
+    results.to_csv(OUTPUT, index=False)
+
+    print(f"\nSaved results: {OUTPUT}")
     print(results.groupby(["chemistry", "curve_type"]).size())

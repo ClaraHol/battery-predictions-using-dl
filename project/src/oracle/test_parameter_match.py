@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+import matplotlib.pyplot as plt
 from torch import nn
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -161,6 +162,7 @@ def analyze(df, curve_type):
 
     return rows
 
+
 if __name__ == "__main__":
     # check_parameter_consistency()
 
@@ -172,6 +174,9 @@ if __name__ == "__main__":
         analyze(efc0, "efc0") +
         analyze(efc50, "efc50")
     )
+
+    print(f"\nMean time ratio: {results['time_ratio'].mean():.3f}")
+    print(f"\nMedian time ratio: {results['time_ratio'].median():.3f}")
 
     print("\n===== Normalized duration by chemistry =====")
     print(
@@ -196,6 +201,12 @@ if __name__ == "__main__":
         results.nlargest(20, "time_ratio")
         .to_string(index=False)
     )
+
+    # print("\n===== 20 smallest time ratios =====")
+    # print(
+    #     results.nsmallest(20, "time_ratio")
+    #     .to_string(index=False)
+    # )
 
     # cell = efc50[
     # efc50["cell_id"] == "tongji_CY25-05_1-#2"

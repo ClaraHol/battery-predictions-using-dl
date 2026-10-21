@@ -2,7 +2,8 @@ import pandas as pd
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-csv_path = PROJECT_ROOT / "models" / "MLP_models" / "experimental_inference_mlp.csv"
+# csv_path = PROJECT_ROOT / "models" / "MLP_models" / "experimental_inference_mlp.csv"
+csv_path = PROJECT_ROOT / "models" / "MLP_models" / "Combined" / "experimental_inference_mlp_combined.csv"
 # csv_path = PROJECT_ROOT / "models" / "SBI_models" / "experimental_inference.csv"
 df = pd.read_csv(csv_path)
 
