@@ -1,5 +1,6 @@
 import pandas as pd
 import matplotlib.pyplot as plt
+import random
 from pathlib import Path
 
 data_dir = "/work3/claho/battery_datasets/processed/"
@@ -61,7 +62,9 @@ print(efc0.loc[efc0["source_dataset"] == "tum"].head())
 
 
 out_dir = Path("project/reports/figures/oracle_testing")
-cell_indices = [5, 10, 15, 20, 25, 30, 35, 40, 45]
+cell_indices = random.sample(
+    range(efc0["cell_id"].drop_duplicates().shape[0]), 9
+)
 cell_ids = efc0["cell_id"].drop_duplicates().iloc[cell_indices]
 
 fig, axes = plt.subplots(3, 3, figsize=(12, 8))

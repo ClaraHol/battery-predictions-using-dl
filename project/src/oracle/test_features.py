@@ -2,8 +2,8 @@ import pandas as pd
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-csv_path = PROJECT_ROOT / "models" / "SBI_models" / "experimental_inference.csv"
-
+csv_path = PROJECT_ROOT / "models" / "MLP_models" / "experimental_inference_mlp.csv"
+# csv_path = PROJECT_ROOT / "models" / "SBI_models" / "experimental_inference.csv"
 df = pd.read_csv(csv_path)
 
 # Identify normalized parameter columns
@@ -91,4 +91,5 @@ if duplicates.any():
         .to_string(index=False)
     )
 
-print(df.loc[df["curve_type"] == "efc0"][features_physical])
+# print(df.loc[df["curve_type"] == "efc0"][features_physical])
+

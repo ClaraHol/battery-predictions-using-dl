@@ -320,13 +320,13 @@ def save_results(output_path, designs, metadata):
 # Settings
 # =============================================================================
 
-N = 500
+N = 50000
 ACCURACY = "realistic"  # "good", "realistic", or "rough"
 SEED = 0
 
 OCV_TOL = 0.30
 MIN_INACTIVE_FRACTION = 0.02
-MAX_ATTEMPTS_FACTOR = 10000
+MAX_ATTEMPTS_FACTOR = 200000
 
 CHEMISTRIES = [
     "25R",
@@ -404,7 +404,7 @@ def sample_chemistry(chemistry, chemistry_index):
                     f"after {attempts:>8} proposals "
                     f"({len(accepted) / attempts:.2%})"
                 )
-        else:
+        else:.
             rejected[reason] += 1
 
     if len(accepted) != N:

@@ -1,6 +1,6 @@
 #BSUB -J TrainLargeNSF
-#BSUB -o outputs/TrainLargeNSF.out
-#BSUB -e outputs/TrainLargeNSF.err
+#BSUB -o outputs/TrainLargeNSF_%J.out
+#BSUB -e outputs/TrainLargeNSF_%J.err
 #BSUB -n 8
 #BSUB -R "span[hosts=1]"
 #BSUB -q hpc
@@ -13,4 +13,4 @@ source .venv/bin/activate
 
 
 
-python project/src/models/train_Large_NSF.py
+python -u project/src/models/train_Large_NSF.py

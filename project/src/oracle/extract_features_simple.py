@@ -35,8 +35,8 @@ SOURCE_TO_CHEMISTRY = {
     "tongji_": "25R",
     "tum_": "VTC5A",
     "cmu_": "VTC6",
-    "SNL_18650_LFP_": "M1A",
-    "SNL_18650_NMC_": "HG2",
+    "snl_lfp": "M1A",
+    "snl_nmc": "HG2",
     "elt_": "MJ1",
 }
 
@@ -52,7 +52,7 @@ def get_chemistry(cell_id):
 # 1. Load all chemistry-specific SBI models
 # ============================================================
 
-def load_combined_SBI():
+def load_all_SBI():
     models = {}
 
     for chemistry, (capacity, current, v_min, v_max) in CHEMISTRY_CONFIG.items():
@@ -85,7 +85,7 @@ def load_combined_SBI():
 
         posterior = inference.build_posterior(prior=prior)
 
-        model = {
+        models[chemistry] = {
             "posterior": posterior,
             "param_names": list(params_log.keys()),
             "log_flags": list(module.params_log_flag.values()),
@@ -99,6 +99,7 @@ def load_combined_SBI():
         print(f"Loaded SBI: {chemistry}")
 
     return models
+
 
 
 # ============================================================
