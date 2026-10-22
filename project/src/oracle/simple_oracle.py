@@ -15,7 +15,7 @@ import pandas as pd
 
 
 
-INTERPRETER = "MLP"
+INTERPRETER = "SBI"
 DATA_ROOT = Path(f"/work3/s214728/battery-predictions/models/{INTERPRETER}_models/Combined")
 METADATA_ROOT = Path("/work3/claho/battery_datasets/processed")
 OUT_DIR = Path(f"work3/claho/battery_models/oracle/{INTERPRETER.lower()}/")
