@@ -24,17 +24,21 @@ MODEL_DIR = PROJECT_ROOT / "models" / "MLP_models"
 OUTPUT = PROJECT_ROOT / "models" / "inference_results" / "experimental_inference_mlp.csv"
 DEVICE = torch.device("cpu")
 
-# Chemistry: rated capacity (Ah), reference current (A), voltage limits (V)
+# Chemistry: rated capacity (Ah), reference current (A), voltage limits (V),
+# and direction of the reference-performance-test curve used for MLP training.
+# The direction is explicit because the inferred theta_n_init/theta_p_init
+# represent theta_l for charge-trained models and theta_h for discharge-trained
+# models. The current sign is retained for the observation time scale only.
 CHEMISTRY_CONFIG = {
-    "25R": (2.5, -1.25, 2.5, 4.2),
-    "HG2": (3.0, -1.5, 2.5, 4.2),
-    "M1A": (1.1, -0.55, 2.0, 3.6),
-    "MJ1": (3.5, 3.5, 2.5, 4.2),
-    "PA": (74.273, 24.33, 2.75, 4.2),
-    "PBC": (76.0, 25.43, 2.75, 4.2),
-    "PD": (83.456, 28.0, 2.5, 4.15),
-    "VTC5A": (2.5, 2.5, 2.5, 4.25),
-    "VTC6": (3.0, 0.6, 2.5, 4.25),
+    "25R": (2.5, -1.25, 2.5, 4.2, "charge"),
+    "HG2": (3.0, -1.5, 2.5, 4.2, "charge"),
+    "M1A": (1.1, -0.55, 2.0, 3.6, "charge"),
+    "MJ1": (3.5, 3.5, 2.5, 4.2, "discharge"),
+    "PA": (74.273, 24.33, 2.75, 4.2, "discharge"),
+    "PBC": (76.0, 25.43, 2.75, 4.2, "discharge"),
+    "PD": (83.456, 28.0, 2.5, 4.15, "discharge"),
+    "VTC5A": (2.5, 2.5, 2.5, 4.25, "discharge"),
+    "VTC6": (3.0, 0.6, 2.5, 4.25, "discharge"),
 }
 
 SOURCE_TO_CHEMISTRY = {
@@ -154,6 +158,7 @@ def load_all_mlps():
             "log_flags": flags,
             "prior_min": low,
             "prior_range": high - low,
+            "direction": CHEMISTRY_CONFIG[chemistry][4],
         }
         print(f"Loaded MLP: {chemistry}")
     return models
@@ -172,7 +177,7 @@ def mlp_inference(model, voltage, time, chemistry):
     if len(time) < 2 or time[-1] <= time[0]:
         raise ValueError("Curve has insufficient valid time points")
 
-    capacity, current, v_min, v_max = CHEMISTRY_CONFIG[chemistry]
+    capacity, current, v_min, v_max, _direction = CHEMISTRY_CONFIG[chemistry]
     time = time - time[0]
     t_interp = np.linspace(0, time[-1], 100)
     v_interp = np.interp(t_interp, time, voltage)
@@ -199,7 +204,12 @@ def mlp_inference(model, voltage, time, chemistry):
 
 
 def result_row(cell_id, chemistry, curve_type, model, normalized, physical):
-    row = {"cell_id": cell_id, "chemistry": chemistry, "curve_type": curve_type}
+    row = {
+        "cell_id": cell_id,
+        "chemistry": chemistry,
+        "curve_type": curve_type,
+        "direction": model["direction"],
+    }
     for name, norm, phys in zip(model["param_names"], normalized, physical):
         row[f"{name}_normalized"] = float(norm)
         row[f"{name}_physical"] = float(phys)

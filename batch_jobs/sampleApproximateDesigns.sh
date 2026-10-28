@@ -3,14 +3,14 @@
 #BSUB -o outputs/ApproxDesign_%J_%I.out
 #BSUB -e outputs/ApproxDesign_%J_%I.err
 #BSUB -q hpc
-#BSUB -n 1
-#BSUB -W 00:20
-#BSUB -R "rusage[mem=1GB]"
-#BSUB -M 1GB
+#BSUB -n 8
+#BSUB -R "span[hosts=1]"
+#BSUB -W 02:00
+#BSUB -R "rusage[mem=4GB]"
+#BSUB -M 4GB
 
 set -euo pipefail
 
-# Submit from project root, after: mkdir -p outputs
 module load python3/3.13.11
 source .venv/bin/activate
 
@@ -23,10 +23,10 @@ export MKL_NUM_THREADS=1
 
 python -u project/src/simulation_experiments/sample_approximate_designs_batch.py \
     --chemistry "$CHEM" \
-    --n 500 \
+    --n 200000 \
     --accuracy realistic \
     --seed 0 \
     --min-inactive-fraction 0.02 \
     --capacity-source used \
-    --checkpoint-every 1000 \
-    --overwrite
+    --checkpoint-every 10000 \
+    --resume

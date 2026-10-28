@@ -16,6 +16,8 @@ def simulator(params, current, t_sim):
     params["Current function [A]"] = current
     parameter_values = pybamm.ParameterValues(params)
 
+
+
     solver = pybamm.IDAKLUSolver(rtol=1e-3, atol=1e-3, options={"dt_min": 1e-6})
     var_pts = {
         "x_n": 20,  # negative electrode thickness direction mesh size
@@ -34,8 +36,8 @@ def simulator(params, current, t_sim):
         sim.solve(t_eval=t_eval)
         # sim.solve()
         return sim.solution
-    except Exception:
-        result = "Extreme case error!"
+    except Exception as e:
+        result = f"{type(e).__name__}: {e}"
         del sim, model, parameter_values, solver
         gc.collect()
         return result

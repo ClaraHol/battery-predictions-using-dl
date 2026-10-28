@@ -1,0 +1,5 @@
+chemistry,config_matches,train_capacity_Ah,train_current_A,train_vmin_V,train_vmax_V,production_capacity_Ah,production_current_A,production_vmin_V,production_vmax_V
+HG2,True,3.0,-1.5,2.5,4.2,3.0,-1.5,2.5,4.2
+M1A,False,1.1,-0.55,2.0,2.6,1.1,-0.55,2.0,3.6
+VTC5A,True,2.5,2.5,2.5,4.25,2.5,2.5,2.5,4.25
+VTC6,True,3.0,0.6,2.5,4.25,3.0,0.6,2.5,4.25
