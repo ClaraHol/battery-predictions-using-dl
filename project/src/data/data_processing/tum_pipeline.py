@@ -20,27 +20,65 @@ import pandas as pd
 
 from tum_processing import load_fields, to_hours, I_THR, C_NOM
 
- 
-SUMMARY_DIR = Path("/work3/claho/battery_datasets/sony_vtc5a/processed_new")         # <- output folder of build_cell_csvs.py
-
+DISCHARGE_END_I_THR = 0.05  
+SUMMARY_DIR = Path("/work3/claho/battery_datasets/sony_vtc5a/summaries")         # <- output folder of build_cell_csvs.py
+DATA_ROOT = Path("/work3/claho/battery_datasets/sony_vtc5a/")
 
 # ------------------------------------------------------------------ file index
 def build_index(root):
-    """idx[cell_num]['cu' | 'cyc'][interval_no] -> sorted list of .mat paths."""
-    idx = defaultdict(lambda: {"cu": defaultdict(list), "cyc": defaultdict(list)})
+    idx = defaultdict(
+        lambda: {
+            "cu": defaultdict(list),
+            "cyc": defaultdict(list)
+        }
+    )
+
     for f in sorted(Path(root).rglob("*.mat")):
         m_id = re.search(r"BW-VTC-(\d+)", f.name)
-        m_cu = re.search(r"(?:^|[\\/])CU(\d+)(?:[\\/])", str(f), re.I)
-        m_cy = re.search(r"(?:^|[\\/])Cyc(\d+)(?:[\\/])", str(f), re.I)
+        m_cu = re.search(r"(?:^|[\\/])CU(\d+)(?:_[^\\/]+)?(?:[\\/])", str(f), re.I)
+        m_cy = re.search(r"(?:^|[\\/])Cyc(\d+)(?:[\\/])",str(f), re.I)
+
         if not m_id or not (m_cu or m_cy):
             continue
+
         cell = int(m_id.group(1))
-        if m_cu:
-            idx[cell]["cu"][int(m_cu.group(1))].append(f)
-        else:
-            idx[cell]["cyc"][int(m_cy.group(1))].append(f)
+
+        if m_cu: idx[cell]["cu"][int(m_cu.group(1))].append(f)
+        else:  idx[cell]["cyc"][int(m_cy.group(1))].append(f)
+
     return idx
 
+def debug_tum_files(root, cell_num=389):
+    root = Path(root)
+
+    print(f"Scanning: {root.resolve()}")
+    print(f"Root exists: {root.exists()}")
+
+    files = [
+        p for p in root.rglob("*")
+        if p.is_file()
+        and p.suffix.lower() == ".mat"
+        and re.search(
+            rf"(?<!\d){cell_num}(?!\d)",
+            str(p)
+        )
+    ]
+
+    print(f"\nFound {len(files)} possible files:")
+
+    for f in files:
+        m_id = re.search(r"BW-VTC-(\d+)", f.name, re.I)
+        m_cu = re.search(r"(?:^|[\\/])CU(\d+)(?:_[^\\/]+)?(?:[\\/])", str(f), re.I)
+        m_cy = re.search(r"(?:^|[\\/])Cyc(\d+)(?:[\\/])", str(f), re.I)
+
+        print(
+            f.name,
+            "cell:", m_id.group(1) if m_id else None,
+            "CU:", m_cu.group(1) if m_cu else None,
+            "Cyc:", m_cy.group(1) if m_cy else None
+        )
+
+    return files
 
 def _num(cell_id):
     return int(re.search(r"(\d+)", str(cell_id)).group(1))
@@ -64,25 +102,25 @@ def _make_cref(summary):
     return cref
 
 
-MIN_CHARGE_H, MIN_CHARGE_AH = 0.1, 0.25      # a "charge" = sustained positive current (not regen pulses)
+MIN_DISCHARGE_H, MIN_DISCHARGE_AH = 0.1, -0.25      # a "charge" = sustained positive current (not regen pulses)
 
 
 def _charge_mask(d):
     """Boolean mask of rows belonging to a charging phase.
     With Command: Command == 'Charge'. Without it (dynamic cells 447-458): runs of I > I_THR
-    lasting >= MIN_CHARGE_H hours AND >= MIN_CHARGE_AH Ah, which excludes regenerative pulses."""
+    lasting >= MIN_DISCHARGE_H hours AND >= MIN_DISCHARGE_AH Ah, which excludes regenerative pulses."""
     if "Command" in d:
-        return d["Command"] == "Charge"
+        return d["Command"] == "Discharge"
     t, I = d["Time"], d["I"]
     n = len(I)
-    pos = I > I_THR
+    pos = I < -I_THR
     edge = np.flatnonzero(np.diff(np.r_[False, pos, False].astype(int)))
     s, e = edge[::2], edge[1::2]
     dq0 = np.r_[0.0, np.cumsum(np.where(pos, I * np.r_[np.clip(np.diff(t), 0, None), 0.0], 0.0))]
     ah = dq0[e] - dq0[s]
     dur = t[np.minimum(e, n - 1)] - t[s]
     mask = np.zeros(n, bool)
-    for a, b in zip(s[(dur >= MIN_CHARGE_H) & (ah >= MIN_CHARGE_AH)], e[(dur >= MIN_CHARGE_H) & (ah >= MIN_CHARGE_AH)]):
+    for a, b in zip(s[(dur >= MIN_DISCHARGE_H) & (ah <= MIN_DISCHARGE_AH)], e[(dur >= MIN_DISCHARGE_H) & (ah <= MIN_DISCHARGE_AH)]):
         mask[a:b] = True
     return mask
 
@@ -93,150 +131,351 @@ def _load(path):
     return d
 
 
-def _segment(d, carry, cref):
-    """Split one file into charge-started cycles. Returns (cycles, carry_out).
-    A cycle starts where Command switches into 'Charge' and ends at the next such start.
-    cycle['efc'] = cumulative EFC (charge throughput / C_new) at the cycle's start."""
-    t, I = d["Time"], d["I"]
-    dt_next = np.r_[np.clip(np.diff(t), 0, None), 0.0]     # I[k] is held until t[k+1]
-    dq = np.where(I > I_THR, I * dt_next, 0.0)
-    cs = np.cumsum(dq)
-    ch = _charge_mask(d)
-    starts = np.flatnonzero(ch & ~np.r_[False, ch[:-1]])
-    ends = np.r_[starts[1:], len(t)]
-    cycles = [dict(efc=carry + (cs[s - 1] if s > 0 else 0.0) / cref, s=int(s), e=int(e))
-              for s, e in zip(starts, ends)]
-    return cycles, carry + cs[-1] / cref
+def _discharge_curve(d):
+    """
+    Extract the largest contiguous discharge phase from
+    a capacity-check measurement.
 
+    Assumes negative current corresponds to discharge.
+    """
 
-def _scan(cyc_files, cref, stop_efc):
-    """Walk cycling files in chronological order, collect (efc, file, rows) of every cycle
-    until EFC exceeds stop_efc. Only the small per-cycle bookkeeping is kept."""
-    cands, carry, n_cyc = [], 0.0, 0
-    for n in sorted(cyc_files):
-        for path in cyc_files[n]:
-            d = _load(path)
-            cycles, carry = _segment(d, carry, cref(n))
-            for j, c in enumerate(cycles):
-                cands.append(dict(c, path=path, interval=n, cycle_no=n_cyc + j))
-            n_cyc += len(cycles)
-        if carry > stop_efc:
+    t = np.asarray(d["Time"], dtype=float)
+    I = np.asarray(d["I"], dtype=float)
+    V = np.asarray(d["U"], dtype=float)
+
+    if len(t) == 0:
+        return None
+
+    # Identify discharge samples
+    if "Command" in d:
+        command = np.asarray(d["Command"])
+        mask = np.array([str(x).strip().lower() == "discharge" for x in command])
+    else:
+        mask = I < -abs(I_THR)
+
+    # Split into contiguous discharge segments
+    edges = np.flatnonzero(np.diff(np.r_[False, mask, False].astype(int)))
+
+    starts = edges[::2]
+    ends = edges[1::2]
+
+    if len(starts) == 0:
+        return None
+
+    # Choose the discharge segment with largest Ah throughput
+    best = None
+    best_capacity = -np.inf
+
+    for s, e in zip(starts, ends):
+
+        if e - s < 2:
+            continue
+
+        # Remove very long segments
+        duration_s = (t[e - 1] - t[s]) * 3600
+
+        if duration_s > 20000:
+            continue
+
+        dt = np.clip(np.diff(t[s:e]), 0, None)
+        current = I[s:e - 1]
+        capacity = np.sum(np.maximum(-current, 0) * dt)
+
+        if capacity > best_capacity:
+            best_capacity = capacity
+            best = (s, e)
+
+    if best is None:
+        return None
+
+    s, e = best
+
+    return pd.DataFrame({
+        "time_s": (t[s:e] - t[s]) * 3600,
+        "voltage_V": V[s:e],
+        "current_A": I[s:e]
+    }).reset_index(drop=True)
+
+def _trim_flat_tail(curve, max_range_v=0.005, min_duration_s=60, min_points=10):
+    """
+    Remove a terminal constant-voltage / flat-voltage tail.
+
+    Starting from the final point, walk backwards while the voltage
+    remains within max_range_v of the terminal plateau.
+
+    Parameters
+    ----------
+    max_range_v : float
+        Maximum voltage variation allowed in the flat tail.
+        0.005 = 5 mV.
+    min_duration_s : float
+        Minimum duration required before considering it a real flat tail.
+    min_points : int
+        Minimum number of samples required in the flat tail.
+    """
+
+    if curve is None or len(curve) < min_points + 2:
+        return curve
+
+    t = curve["time_s"].to_numpy()
+    V = curve["voltage_V"].to_numpy()
+
+    n = len(V)
+
+    # Start from final voltage
+    vmin = V[-1]
+    vmax = V[-1]
+    start = n - 1
+
+    # Walk backwards while voltage remains in a narrow band
+    for i in range(n - 2, -1, -1):
+
+        new_min = min(vmin, V[i])
+        new_max = max(vmax, V[i])
+
+        if new_max - new_min > max_range_v:
             break
-    return cands
 
+        vmin = new_min
+        vmax = new_max
+        start = i
 
-def _cycle_frame(c, cell_id):
-    """Standard-schema DataFrame for one cycle (+EFC, cell_id)."""
-    d = _load(c["path"])
-    s, e = c["s"], c["e"]
-    t, I = d["Time"][s:e], d["I"][s:e]
-    dt = np.r_[np.clip(np.diff(t), 0, None), 0.0]
-    dq = I * dt
-    out = pd.DataFrame({
-        "time_s": (t - t[0]) * 3600.0,
-        "voltage_V": d["U"][s:e],
-        "current_A": I,
-        "temp_C": d["T1"][s:e],
-        "cycle_number": c["cycle_no"],
-        "charge_capacity_Ah": np.cumsum(np.where(I > 0, dq, 0.0)),
-        "discharge_capacity_Ah": np.cumsum(np.where(I < 0, -dq, 0.0)),
-    })
-    out["charge_block"] = _charge_mask(d)[s:e]      # True only in the real charging phase
-    out["EFC"] = c["efc"]
-    out["cell_id"] = cell_id
-    return out
+    tail_points = n - start
+    tail_duration = t[-1] - t[start]
 
-def remove_cv_phase(df, voltage_tol=0.005, window=15):
+    # Only trim if it is clearly a real terminal plateau
+    if (tail_points >= min_points and tail_duration >= min_duration_s and start > 1):
+        # Keep the first point of the plateau as the endpoint
+        curve = curve.iloc[:start + 1].copy()
+
+    return curve.reset_index(drop=True)
+
+def _capacity_check_curves_old(cell_id, idx, summary_dir):
     """
-    Truncate charging curve at the beginning of the
-    sustained upper-voltage plateau.
+    Load discharge curves from capacity-check files only.
+
+    Return a list of:
+        EFC, CU, curve
     """
 
-    if len(df) < window:
-        return df.copy()
+    cu_files = idx[_num(cell_id)]["cu"]
 
-    v = df["voltage_V"].to_numpy(dtype=float)
+    if not cu_files:
+        return []
 
-    # Smooth voltage
-    v_smooth = (
-        pd.Series(v)
-        .rolling(5, center=True, min_periods=1)
-        .median()
-        .to_numpy()
-    )
+    summary = _summary(cell_id, summary_dir)
+    checks = []
 
-    # Approximate maximum voltage
-    v_max = np.max(v_smooth)
+    for cu, paths in sorted(cu_files.items()):
+        rows = summary.loc[(summary["CU"] == cu) & summary["EFC"].notna()]
+        if rows.empty:
+            continue
 
-    # Detect a nearly constant voltage window
-    voltage_range = (
-        pd.Series(v_smooth).rolling(window).max()
-        - pd.Series(v_smooth).rolling(window).min()
-    ).to_numpy()
+        efc = float(rows["EFC"].iloc[0])
+        best_curve = None
+        best_capacity = -np.inf
 
-    plateau = (
-        (voltage_range < voltage_tol)
-        & (v_smooth >= v_max - voltage_tol)
-    )
+        for path in paths:
+            d = _load(path)
+            curve = _discharge_curve(d)
 
-    indices = np.flatnonzero(plateau)
+            if curve is None:
+                continue
 
-    if len(indices) == 0:
-        return df.copy()
+            t_h = curve["time_s"].to_numpy() / 3600
+            I = curve["current_A"].to_numpy()
+            capacity = np.sum(np.maximum(-I[:-1], 0) * np.diff(t_h))
 
-    cutoff = indices[0] - window + 1
+            if capacity > best_capacity:
+                best_capacity = capacity
+                best_curve = curve
 
-    # Avoid returning an empty curve
-    if cutoff < 20:
-        return df.copy()
+        if best_curve is not None:
+            checks.append({"EFC": efc, "CU": cu, "curve": best_curve})
 
-    return df.iloc[:cutoff].copy().reset_index(drop=True)
+    return sorted(checks, key=lambda x: x["EFC"])
 
-def _charging_curve(df):
-    """Charging phase only. Uses charge_block (not current > 0, which would also pick up
-    regenerative braking pulses in the dynamic cells)."""
-    out = remove_cv_phase(df[df["charge_block"]].copy().reset_index(drop=True))
-    return out
+def _capacity_check_curves(cell_id, idx, summary_dir, verbose=True):
+    num = _num(cell_id)
+    cu_files = idx[num]["cu"]
+    why = []
+
+    if not cu_files:
+        n_with_cu = sum(1 for v in idx.values() if v["cu"])
+        why.append(
+            f"idx has no CU files for cell {num} "
+            f"(idx has CU files for {n_with_cu} cells)"
+        )
+
+    summary = _summary(cell_id, summary_dir)
+    checks = []
+
+    for cu, paths in sorted(cu_files.items()):
+
+        rows = summary.loc[
+            (summary["CU"] == cu)
+            & summary["EFC_total"].notna()
+        ]
+
+        if rows.empty:
+            why.append(
+                f"CU{cu}: no summary row with a valid EFC "
+                f"(summary CU numbers: "
+                f"{sorted(summary['CU'].astype(int).unique())[:6]}...)"
+            )
+            continue
+
+        efc = float(rows["EFC_total"].iloc[0])
+
+        best_curve = None
+        best_capacity = -np.inf
+
+        for path in paths:
+
+            d = _load(path)
+            curve = _discharge_curve(d)
+
+            if curve is None:
+
+                cmd = (
+                    list(
+                        pd.unique(
+                            pd.Series(
+                                np.asarray(d["Command"])
+                            ).astype(str).str.strip()
+                        )
+                    )[:5]
+                    if "Command" in d
+                    else "no Command field"
+                )
+
+                I = np.asarray(d["I"], float)
+
+                why.append(
+                    f"CU{cu} {Path(path).name}: "
+                    f"no discharge segment found | "
+                    f"fields={list(d)} | "
+                    f"Command values={cmd} | "
+                    f"I range=({np.nanmin(I):.2f}, "
+                    f"{np.nanmax(I):.2f}) | "
+                    f"rows={len(I)}"
+                )
+
+                continue
+
+            # -----------------------------------------
+            # Remove constant-voltage tail
+            # -----------------------------------------
+            curve = _trim_flat_tail(
+                curve,
+                max_range_v=0.005,
+                min_duration_s=60,
+                min_points=10
+            )
+
+            if len(curve) < 2:
+                continue
+
+            # -----------------------------------------
+            # Calculate capacity
+            # -----------------------------------------
+            t_h = curve["time_s"].to_numpy() / 3600
+            I = curve["current_A"].to_numpy()
+
+            capacity = np.sum(
+                np.maximum(-I[:-1], 0) * np.diff(t_h)
+            )
+
+            if capacity > best_capacity:
+                best_capacity = capacity
+                best_curve = curve
+
+        if best_curve is not None:
+            checks.append({
+                "EFC": efc,
+                "CU": cu,
+                "curve": best_curve
+            })
+
+    if verbose and not checks:
+        print(
+            f"[{cell_id}] checks=[] because:\n  "
+            + "\n  ".join(why[:4])
+            + (
+                f"\n  ... (+{len(why) - 4} more)"
+                if len(why) > 4
+                else ""
+            )
+        )
+
+    return sorted(checks, key=lambda x: x["EFC"])
 
 
 def vtc5a_curves(cell_id, idx, summary_dir=SUMMARY_DIR, efc_early=0.0, efc_late=50.0):
-    """(efc_early_df, efc_late_df) in the same formats process_cell returns.
-    early: full cycle (all rows) closest to efc_early.
-    late : DataFrame(lower_curve, upper_curve, weight) of charging voltages, interpolated
-           between the cycles bracketing efc_late (single cycle if within 0.5 EFC)."""
-    cyc_files = idx[_num(cell_id)]["cyc"]
-    if not cyc_files:
-        return None, None                                   # calendar cell
-    cref = _make_cref(_summary(cell_id, summary_dir))
-    cands = _scan(cyc_files, cref, stop_efc=max(efc_early, efc_late) + 5)
-    if not cands:
+    """
+    Extract discharge curves ONLY from capacity checks.
+
+    Early:  Closest available capacity-check discharge curve.
+    Late:   Exact/nearby capacity-check discharge curve,
+            or two capacity-check curves bracketing target EFC.
+    """
+
+    checks = _capacity_check_curves(cell_id, idx, summary_dir)
+    if not checks:
         return None, None
-    efcs = np.array([c["efc"] for c in cands])
-    cid = str(cell_id)
 
+    efcs = np.array([c["EFC"] for c in checks])
+
+    # ---------------- EARLY ----------------
     early = None
-    if efcs.min() <= efc_early + 1.0:   
-        curve = _charging_curve(_cycle_frame(cands[int(np.abs(efcs - efc_early).argmin())], cid))
-        v = curve["voltage_V"]                 # a cycle within 1 EFC of the target exists
-        vt = curve["time_s"]
-        early = early = pd.DataFrame({"time_s": vt, "early_curve": v})
+    i = int(np.argmin(np.abs(efcs - efc_early)))
+    if abs(efcs[i] - efc_early) <= 1.0:
+        curve = checks[i]["curve"]
+        early = pd.DataFrame({"time_s": curve["time_s"].to_numpy(),"early_curve": curve["voltage_V"].to_numpy()})
 
+    # ---------------- LATE ----------------
     late = None
-    if efc_late <= efcs.max():
-        i = int(np.abs(efcs - efc_late).argmin())
-        if abs(efcs[i] - efc_late) >= 0.5 and (efcs < efc_late).any() and (efcs > efc_late).any():
-            lo = int(np.where(efcs == efcs[efcs < efc_late].max())[0][-1])
-            up = int(np.where(efcs == efcs[efcs > efc_late].min())[0][0])
-            w = (efc_late - efcs[lo]) / (efcs[up] - efcs[lo])
-            lc = _charging_curve(_cycle_frame(cands[lo], cid))["voltage_V"]
-            uc = _charging_curve(_cycle_frame(cands[up], cid))["voltage_V"]
-            lct = _charging_curve(_cycle_frame(cands[lo], cid))["time_s"]
-            uct = _charging_curve(_cycle_frame(cands[up], cid))["time_s"]
-            late = pd.DataFrame({"lower_curve_time": lct, "upper_curve_time": uct, "lower_curve": lc, "upper_curve": uc, "weight": w})
-        else:
-            v = _charging_curve(_cycle_frame(cands[i], cid))["voltage_V"]
-            vt = _charging_curve(_cycle_frame(cands[i], cid))["time_s"]
-            late = pd.DataFrame({"lower_curve_time": vt, "upper_curve_time": vt, "lower_curve": v, "upper_curve": v, "weight": 1})
+    i = int(np.argmin(np.abs(efcs - efc_late)))
+    if abs(efcs[i] - efc_late) < 0.5:
+        curve = checks[i]["curve"]
+        v = curve["voltage_V"].to_numpy()
+        t = curve["time_s"].to_numpy()
+
+        late = pd.DataFrame({
+            "lower_curve_time": t,
+            "upper_curve_time": t.copy(),
+            "lower_curve": v,
+            "upper_curve": v.copy(),
+            "weight": 1.0
+        })
+    else:
+
+        lower = np.where(efcs < efc_late)[0]
+        upper = np.where(efcs > efc_late)[0]
+
+        if len(lower) == 0 or len(upper) == 0:
+            return early, None
+
+        lo = lower[-1]
+        up = upper[0]
+
+        w = (efc_late - efcs[lo])/ (efcs[up] - efcs[lo])
+
+        lc = checks[lo]["curve"]
+        uc = checks[up]["curve"]
+        lct = lc["time_s"]
+        uct = uc["time_s"]
+        lcv = lc["voltage_V"]
+        ucv = uc["voltage_V"]
+
+        late = pd.DataFrame({
+            "lower_curve_time": pd.Series(np.asarray(lct)),
+            "upper_curve_time": pd.Series(np.asarray(uct)),
+            "lower_curve": pd.Series(np.asarray(lcv)),
+            "upper_curve": pd.Series(np.asarray(ucv)),
+            "weight": w
+        })
+    
     return early, late
 
 
@@ -284,6 +523,64 @@ def process_cell_vtc5a(cell_id, idx, summary_dir=SUMMARY_DIR, soh=0.9,
     })
     early, late = vtc5a_curves(cell_id, idx, summary_dir, efc_early, efc_late)
     return meta, early, late
+
+if __name__ == "__main__":
+    import numpy as np
+    from tum_processing import load_fields
+
+    def diagnose_time_units(path):
+        d = load_fields(path, ["Time", "I"])
+
+        t = np.asarray(d["Time"], dtype=float)
+        I = np.asarray(d["I"], dtype=float)
+
+        dt = np.diff(t)
+        positive_dt = dt[dt > 0]
+
+        if len(positive_dt) == 0:
+            return
+
+        median_dt = np.median(positive_dt)
+
+        # Current held until next measurement
+        charge_raw = np.sum(
+            np.maximum(I[:-1], 0) *
+            np.clip(dt, 0, None)
+        )
+
+        # Interpretation A: raw Time is in hours
+        ah_if_hours = charge_raw
+
+        # Interpretation B: raw Time is in seconds
+        ah_if_seconds = charge_raw / 3600
+
+        print(f"\nFile: {path}")
+        print(f"Median raw dt: {median_dt:.8f}")
+        print(f"Charge if hours:   {ah_if_hours:.4f} Ah")
+        print(f"Charge if seconds: {ah_if_seconds:.4f} Ah")
+        print(f"Current range: {I.min():.4f} to {I.max():.4f} A")
+    
+    
+    
+
+
+    idx = build_index(DATA_ROOT)
+
+    cell = 280
+
+    for interval, paths in sorted(idx[cell]["cyc"].items()):
+
+        if interval > 5:
+            break
+
+        print(f"\n===== Cycling interval {interval} =====")
+
+        for path in paths:
+            diagnose_time_units(path)
+
+    
+    #files = debug_tum_files(DATA_ROOT, 389)
+
 
 
 

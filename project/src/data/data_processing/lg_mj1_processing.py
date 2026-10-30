@@ -13,25 +13,82 @@ def add_efc(df, q_nom, reset_threshold=RESET_THRESH_AH):
     out["EFC"] = (q + offset) / q_nom
     return out
 
-def discharge_runs(df, discharge_sign=-1, i_thresh_A=0.05, max_dt_s=60.0, v_floor=1.0):
-    d = df[df["voltage_V"] > v_floor].reset_index(drop=True)      # drop the 0.02 V glitch rows; NO sort
-    t = d["time_s"].to_numpy(float)
-    I = d["current_A"].to_numpy(float) * discharge_sign
-    V = d["voltage_V"].to_numpy(float)
+def discharge_runs(
+    df,
+    discharge_sign=-1,
+    i_thresh_A=0.05,
+    max_dt_s=60.0,
+    v_floor=1.0
+):
+    t = df["time_s"].to_numpy(dtype=float)
+    I = df["current_A"].to_numpy(dtype=float) * discharge_sign
+    V = df["voltage_V"].to_numpy(dtype=float)
 
-    dis = I > i_thresh_A
-    run = np.cumsum(np.r_[True, dis[1:] != dis[:-1]])
+    # Keep the original row indices.
+    rows = np.arange(len(df))
+
+    # Identify valid discharge samples without deleting rows.
+    dis = (
+        (I > i_thresh_A)
+        & (V > v_floor)
+        & np.isfinite(t)
+        & np.isfinite(I)
+        & np.isfinite(V)
+    )
+
+    # Actual time difference between consecutive original samples.
     dt = np.diff(t, prepend=t[0])
-    dt = np.where((np.r_[False, run[1:] == run[:-1]]) & (dt > 0) & (dt <= max_dt_s), dt, 0.0)
-    dQ = np.where(dis, I, 0.0) * dt / 3600.0
 
-    tmp = pd.DataFrame({"run": run, "dis": dis, "dQ": dQ, "V": V, "I": I, "t": t})
-    runs = (tmp[tmp.dis].groupby("run")
-            .agg(Q_Ah=("dQ", "sum"), v_start=("V", "first"), v_end=("V", "last"),
-                 mean_I_A=("I", "mean"), t_start=("t", "first"), t_end=("t", "last"))
-            .reset_index(drop=True))
+    # Force a new run at:
+    # 1. Current-state transitions
+    # 2. Large time gaps
+    # 3. Non-increasing timestamps
+    new_run = np.r_[
+        True,
+        (dis[1:] != dis[:-1])
+        | (np.diff(t) > max_dt_s)
+        | (np.diff(t) <= 0)
+        | ~np.isfinite(np.diff(t))
+    ]
+
+    run = np.cumsum(new_run)
+
+    # Don't integrate across run boundaries.
+    same_run = ~new_run
+    valid_dt = same_run & dis
+
+    dQ = np.where(valid_dt, I * dt / 3600.0, 0.0)
+
+    tmp = pd.DataFrame({
+        "run": run,
+        "dis": dis,
+        "dQ": dQ,
+        "V": V,
+        "I": I,
+        "t": t,
+        "row": rows
+    })
+
+    runs = (
+        tmp[tmp.dis]
+        .groupby("run", sort=True)
+        .agg(
+            Q_Ah=("dQ", "sum"),
+            v_start=("V", "first"),
+            v_end=("V", "last"),
+            mean_I_A=("I", "mean"),
+            t_start=("t", "first"),
+            t_end=("t", "last"),
+            discharge_start_idx=("row", "first"),
+            discharge_end_idx=("row", "last")
+        )
+        .reset_index(drop=True)
+    )
+
+    runs["duration_s"] = runs["t_end"] - runs["t_start"]
+
     cum = runs["Q_Ah"].cumsum()
-    runs["efc_start"] = (cum - runs["Q_Ah"])    # divide by q_nom below
+    runs["efc_start"] = cum - runs["Q_Ah"]
     runs["efc_end"] = cum
 
     return runs
@@ -45,11 +102,40 @@ def lgmj1_cycle_life(runs, nominal_Ah, v_end_max=2.6, min_frac=0.8,
     # new RPT whenever the EFC jumps by more than cluster_efc_gap since the previous RPT discharge
     new = rpt["efc_start"].diff().fillna(np.inf) > cluster_efc_gap
     g = new.cumsum()
-    agg = {"first": "first", "max": "max", "median": "median"}[pick]
-    caps = (rpt.groupby(g)
-               .agg(capacity_Ah=("Q_Ah", agg), efc=("efc_start", "min"),
-                    n_runs=("Q_Ah", "size"))
-               .reset_index(drop=True))
+    
+    if pick not in ("first", "max", "median"):
+        raise ValueError(f"Invalid pick: {pick}")
+
+    rpt = rpt.copy()
+    rpt["rpt_id"] = g.to_numpy() - 1
+
+    records = []
+
+    for rpt_id, group in rpt.groupby("rpt_id"):
+
+        if pick == "first":
+            selected = group.iloc[0]
+            capacity = float(selected["Q_Ah"])
+
+        elif pick == "max":
+            selected = group.loc[group["Q_Ah"].idxmax()]
+            capacity = float(selected["Q_Ah"])
+
+        else:
+            capacity = float(group["Q_Ah"].median())
+            selected = group.iloc[np.argmin(abs(group["Q_Ah"] - capacity))]
+
+        records.append({
+            "rpt_id": int(rpt_id),
+            "capacity_Ah": capacity,
+            "efc": float(group["efc_start"].min()),
+            "discharge_start_idx": int(selected["discharge_start_idx"]),
+            "discharge_end_idx": int(selected["discharge_end_idx"]),
+            "n_runs": len(group)
+        })
+
+    caps = (pd.DataFrame(records).sort_values("efc").reset_index(drop=True))
+
     if caps.empty:
         raise ValueError("No RPT runs found - check v_end_max / min_frac")
 
@@ -67,53 +153,8 @@ def lgmj1_cycle_life(runs, nominal_Ah, v_end_max=2.6, min_frac=0.8,
     return dict(cycle_life=life, censored=False, n_full_cycles=len(caps),
                 reference_Ah=ref, caps=caps)
 
+
 def lgmj1_cycle_life_from_df(df, nominal_Ah, **kw):
     runs = discharge_runs(df)
     runs[["efc_start", "efc_end"]] /= nominal_Ah
     return lgmj1_cycle_life(runs, nominal_Ah, **kw)
-"""
-def lgmj1_cycle_life(df, nominal_Ah, eol=0.9, min_frac=0.8,
-                     v_rpt_max=None, confirm=1):
-    d = add_efc(df.sort_values("time_s", kind="stable"), nominal_Ah)
-
-    cyc = (d.groupby("cycle_number")
-             .agg(dis_Ah=("discharge_capacity_Ah", "max"),
-                  v_min=("voltage_V", "min"),
-                  efc_start=("EFC", "min"),
-                  efc_end=("EFC", "max"))
-             .reset_index())
-    
-    print(cyc.sort_values("v_min").head(20))
-    print(cyc.v_min.describe())
-    if v_rpt_max is None:                       # heuristic: look at cyc.v_min first
-        v_rpt_max = cyc["v_min"].min() + 0.2
-
-    is_rpt = (cyc["dis_Ah"] >= min_frac * nominal_Ah * (-1)) & (cyc["v_min"] <= v_rpt_max)
-    key = (~is_rpt).cumsum()                    # consecutive RPT cycles share a key
-    caps = (cyc[is_rpt].groupby(key[is_rpt])
-              .agg(capacity_Ah=("dis_Ah", "max"),
-                   efc=("efc_start", "min"),
-                   cycle=("cycle_number", "min"))
-              .reset_index(drop=True))
-    if caps.empty:
-        raise ValueError("No RPT discharges found - check v_rpt_max / min_frac")
-
-    ref = float(caps["capacity_Ah"].iloc[0])
-    thr = eol * ref
-    below = caps["capacity_Ah"] <= thr
-    ok = below.rolling(confirm).sum().eq(confirm)
-
-    if not ok.any():
-        return dict(cycle_life=float(cyc["efc_end"].iloc[-1]), censored=True,
-                    n_full_cycles=len(caps), reference_Ah=ref, caps=caps)
-
-    i = int(ok.idxmax()) - confirm + 1          # first of the confirmed-below tests
-    if i == 0:
-        life = float(caps.loc[0, "efc"])
-    else:
-        c0, c1 = caps.loc[i - 1], caps.loc[i]
-        frac = (c0.capacity_Ah - thr) / (c0.capacity_Ah - c1.capacity_Ah)
-        life = float(c0.efc + frac * (c1.efc - c0.efc))
-    return dict(cycle_life=life, censored=False, n_full_cycles=len(caps),
-                reference_Ah=ref, caps=caps)
-"""

@@ -15,10 +15,10 @@ import pandas as pd
 
 
 
-INTERPRETER = "SBI"
-DATA_ROOT = Path(f"/work3/s214728/battery-predictions/models/{INTERPRETER}_models/Combined")
+INTERPRETER = "mlp"
+DATA_ROOT = Path(f"/work3/s214728/battery-predictions/models/inference_results/")
 METADATA_ROOT = Path("/work3/claho/battery_datasets/processed")
-OUT_DIR = Path(f"work3/claho/battery_models/oracle/{INTERPRETER.lower()}/")
+OUT_DIR = Path(f"/work3/claho/battery_models/oracle/{INTERPRETER.lower()}/")
 
 
 def load_metadata(
@@ -188,21 +188,20 @@ def main():
     overall_mape = data["ape"].mean()
 
     group1_mape = data.loc[
-        data["group_id"] == 1, "ape"
+        data["group_id"] == 8, "ape"
     ].mean()
 
     without_group1 = data.loc[
-        data["group_id"] != 1, "ape"
+        data["group_id"] != 8, "ape"
     ].mean()
 
-    group1 =  data.loc[data["group_id"] == 1]
+    group1 =  data.loc[data["group_id"] == 8]
     group1_features = group1[feature_columns]
     knn = NearestNeighbors(n_neighbors=3)
     knn.fit(group1_features)
     distance_mat, neighbours_mat = knn.kneighbors(group1_features)
-    print(f"{distance_mat=}")
-    print(f"{neighbours_mat=}")
-
+    #print(f"{distance_mat=}")
+    #print(f"{neighbours_mat=}")
 
     rows = []
 
@@ -238,8 +237,8 @@ def main():
     )
 
     print(f"Overall MAPE: {overall_mape:.2f}%")
-    print(f"Group 1 MAPE: {group1_mape:.2f}%")
-    print(f"Without Group 1: {without_group1:.2f}%")
+    print(f"Group 8 MAPE: {group1_mape:.2f}%")
+    print(f"Without Group 8: {without_group1:.2f}%")
     return 0
 
 if __name__ == "__main__":

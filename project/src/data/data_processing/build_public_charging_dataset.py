@@ -11,24 +11,6 @@ the Farasis test set, these ARE run through the three-step cleaning
 (C-rate > 10C, cycle life < 70, cluster size <= 6), since that's what the
 paper's methodology applies to the training corpus.
 
-*** SNL note - no current column, but confirmed charging-only anyway ***
-voltage_timeseries_all_cells.csv (SNL's real format) has no current
-column, so we can't verify charge-vs-discharge by current sign the way we
-can for the other four sources. However, checking real data confirms
-every cell/cycle in this file is a pure, monotonically-rising voltage
-curve (0% decreasing steps across every cell/cycle checked, spanning from
-near the cell chemistry's low voltage bound to its high one) - i.e. this
-export already IS charging-only, just without a current column to prove
-it independently. Passed through as-is rather than filtered (there's
-nothing to filter).
-
-*** SNL cycle_life is still pending ***
-As established earlier: SNL's cycle_summary_all_cells.csv needs the
-periodic-capacity-check-cluster logic resolved (the paper's documented
-"3 cycles per capacity check" protocol) before cycle_life can be computed
-correctly. That work isn't finished, so SNL cells still won't survive the
-cycle-life filter in this script until it is.
-
 Usage:
     python build_public_charging_dataset.py
 (reads from DATA_ROOT, same layout as build_dataset.py)
@@ -36,6 +18,9 @@ Usage:
 
 import traceback
 from pathlib import Path
+import traceback
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import pandas as pd
 
@@ -56,6 +41,22 @@ EFC_EARLY = 1
 EFC_LATE = 50
 
 
+def process_tum_worker(cell, cell_idx):
+
+    cell_id = f"tum_{cell}"
+
+    try:
+        # Reconstruct the expected index structure
+        num = int(cell.split("-")[-1])
+        idx = {num: cell_idx}
+        meta, efc0, efc50 = process_cell_vtc5a(cell,idx)
+
+        return {"cell_id": cell_id, "meta": meta, "efc0": efc0, "efc50": efc50, "error": None}
+
+    except Exception as e:
+        return {"cell_id": cell_id, "meta": None, "efc0": None, "efc50": None, "error": (cell_id, "tum", str(e), traceback.format_exc())}
+        
+
 def add_charging_curves(early, late, cell_id, early_frames, late_frames):
 
     # Only add if both curves exist
@@ -66,6 +67,8 @@ def add_charging_curves(early, late, cell_id, early_frames, late_frames):
         late_frames.append(late)
     elif early is not None and late is not None:
         print(f"[{cell_id}] - empty efc curve (early has length{len(early)}, late has length {len(late)})")
+    else:
+        print(f"[{cell_id}] - Missing EFC curve, {early=}, {late=}")
    
 
 
@@ -93,7 +96,6 @@ def main():
             errors.append((cell_id, "cmu", str(e), traceback.format_exc()))
 
     # --- Sony-VTC5A (TUM), cyclic/dynamic only ---
-
     tum_dir = DATA_ROOT / "sony_vtc5a"
     idx = build_index(tum_dir)
     overview = read_overview(tum_dir / "bawaii_cell_overview_publication.xlsx")   # from build_cell_csvs
@@ -101,37 +103,57 @@ def main():
                     | overview["aging_domain"].str.lower().str.startswith("dyn")]
     cells = [f"BW-VTC-{n:03d}" for n in keep.index]
     print(f"[tum] found {len(cells)} cyclic/dynamic files")
-    for cell in cells:
-        cell_id = f"tum_{cell}"
-        try:
-            meta, efc0, efc50 = process_cell_vtc5a(cell, idx)
-            metadata_rows.append(meta)
-            add_charging_curves(efc0, efc50, cell_id, charging_early_frames, charging_late_frames)
-        except Exception as e:
-            errors.append((cell_id, "tum", str(e), traceback.format_exc()))
+    # Number of parallel workers
+    n_workers = min(8, os.cpu_count() or 1)
+
+    print(f"[tum] processing with {n_workers} workers")
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        # Process cells in parallel
+        futures = {executor.submit(process_tum_worker, cell, idx[int(cell.split("-")[-1])]): cell for cell in cells}
+
+        # Combine results sequentally
+        for future in as_completed(futures):
+            cell = futures[future]
+            cell_id = f"tum_{cell}"
+
+            try:
+                result = future.result()
+
+                if result["error"] is not None:
+                    errors.append(result["error"])
+                    print(f"[{cell_id}] ERROR")
+                    continue
+
+                metadata_rows.append(result["meta"])
+                add_charging_curves(result["efc0"], result["efc50"], result["cell_id"], charging_early_frames, charging_late_frames)
+                print(f"[{cell_id}] done")
+
+            except Exception as e:
+                errors.append((cell_id,"tum",str(e),traceback.format_exc()))
+                print(f"[{cell_id}] ERROR: {e}")
   
     # --- LG-MJ1 (4TU) ---
-    elt_dir = DATA_ROOT / "lg_mj1"
-    elt_files = list(elt_dir.glob("**/*.csv"))
-    print(f"[elt] found {len(elt_files)} files")
+    # elt_dir = DATA_ROOT / "lg_mj1"
+    # elt_files = list(elt_dir.glob("**/*.csv"))
+    # print(f"[elt] found {len(elt_files)} files")
     
-    for f in elt_files:
-        cell_id = f"elt_{f.stem}"
-        try:
-            temp_C, chrg_c, dchrg_c = parse_lgmj1_filename(f)
-            df = parse_lgmj1(f)
-            if chrg_c == None:
-                meta, efc0, efc50 = process_cell(df, cell_id, "elt", efc_early=EFC_EARLY, efc_late=EFC_LATE)
-            else:
-                meta, efc0, efc50 = process_cell(df, cell_id, "elt", efc_early=EFC_EARLY, efc_late=EFC_LATE, charge_c_rate_override = chrg_c, discharge_c_rate_override= dchrg_c)
-            metadata_rows.append(meta)
-            add_charging_curves(efc0, efc50, cell_id, charging_early_frames, charging_late_frames)
-        except Exception as e:
-            errors.append((cell_id, "elt", str(e), traceback.format_exc()))
+    # for f in elt_files:
+    #     cell_id = f"elt_{f.stem}"
+    #     try:
+    #         temp_C, chrg_c, dchrg_c = parse_lgmj1_filename(f)
+    #         df = parse_lgmj1(f)
+    #         if chrg_c == None:
+    #             meta, efc0, efc50 = process_cell(df, cell_id, "elt", efc_early=EFC_EARLY, efc_late=EFC_LATE)
+    #         else:
+    #             meta, efc0, efc50 = process_cell(df, cell_id, "elt", efc_early=EFC_EARLY, efc_late=EFC_LATE, charge_c_rate_override = chrg_c, discharge_c_rate_override= dchrg_c)
+    #         metadata_rows.append(meta)
+    #         add_charging_curves(efc0, efc50, cell_id, charging_early_frames, charging_late_frames)
+    #     except Exception as e:
+    #         errors.append((cell_id, "elt", str(e), traceback.format_exc()))
    
     # --- Samsung-25R (Zhu et al.) ---
     tongji_dir = DATA_ROOT / "samsung_25r"
-    tongji_files = list(tongji_dir.glob("Dataset_2_NCM_battery/*.csv"))
+    tongji_files = list(tongji_dir.glob("Dataset_3_NCM_NCA_battery/*.csv"))
     print(f"[tongji] found {len(tongji_files)} files")
     for f in tongji_files:
         cell_id = f"tongji_{f.stem}"

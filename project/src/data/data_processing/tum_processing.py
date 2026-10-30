@@ -12,6 +12,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import os
+from concurrent.futures import ProcessPoolExecutor
 
 try:
     from parsers import STANDARD_COLUMNS
@@ -147,14 +149,27 @@ def load_fields(path, fields=NEEDED):
 
 
 def to_hours(t):
-    """README says Time is in h, but guard against seconds: median sample spacing
-    >= 3 min in 'h' would be implausible for a logger, so treat it as seconds."""
-    dts = np.diff(t)
-    dts = dts[dts > 0]
-    if len(dts) and np.median(dts) >= 0.05:
-        return t / 3600.0, "s"
-    return t, "h"
+    """
+    Convert raw time values to hours.
 
+    Detects time units from sampling intervals.
+    Threshold validated against examined TUM VTC5A files.
+    """
+
+    t = np.asarray(t, dtype=float)
+
+    dt = np.diff(t)
+    dt = dt[np.isfinite(dt) & (dt > 0)]
+
+    if len(dt) == 0:
+        raise ValueError("No positive time increments found")
+
+    median_dt = np.median(dt)
+
+    if median_dt >= 0.01:
+        return t / 3600.0, "s"
+
+    return t, "h"
 
 # ------------------------------------------------------------------ analysis
 def throughput_stats(d):
@@ -207,6 +222,8 @@ def checkup_capacity(d):
     return float(caps[1] if len(caps) >= 2 else caps[-1]), len(caps)
 
 
+
+
 def cycle_life(efc, soh, eol):
     """EFC at which SOH first drops to <= eol (linear interpolation); NaN if never."""
     for k in range(1, len(soh)):
@@ -240,7 +257,62 @@ def read_overview(xlsx):
     })
     return out.set_index("cell_num")
 
+def process_mat_file(f):
+    """
+    Process one .mat file independently.
 
+    Returns metadata and calculated statistics.
+    Raw data is not returned to minimize memory usage.
+    """
+
+    f = Path(f)
+
+    m_id = re.search(r"BW-VTC-(\d+)", f.name)
+    m_cu = re.search(
+        r"(?:^|[\\/])CU(\d+)(?:_[^\\/]+)?(?:[\\/])",
+        str(f),
+        re.I
+    )
+    m_cy = re.search(
+        r"(?:^|[\\/])Cyc(\d+)(?:[\\/])",
+        str(f),
+        re.I
+    )
+
+    if not m_id or not (m_cu or m_cy):
+        return None
+
+    cell = int(m_id.group(1))
+
+    d = load_fields(f)
+
+    if "Time" not in d or "I" not in d:
+        return None
+
+    d["Time"], unit = to_hours(d["Time"])
+
+    has_cmd = all(
+        k in d for k in ("Command", "Line", "State")
+    )
+
+    st = throughput_stats(d)
+
+    if m_cu:
+        n = int(m_cu.group(1))
+        cap, n_found = checkup_capacity(d)
+
+        return (
+            cell, "cu", n, unit, st,
+            cap, n_found, has_cmd
+        )
+
+    else:
+        n = int(m_cy.group(1))
+
+        return (
+            cell, "cyc", n, unit, st,
+            None, None, has_cmd
+        )
 # ------------------------------------------------------------------ main
 def main():
     ap = argparse.ArgumentParser()
@@ -259,31 +331,40 @@ def main():
     units = defaultdict(set)
     no_cmd = defaultdict(bool)   # cell -> any file without Command/Line/State
 
-    for f in sorted(root.rglob("*.mat")):
-        m_id = re.search(r"BW-VTC-(\d+)", f.name)
-        m_cu = re.search(r"(?:^|[\\/])CU(\d+)(?:_[^\\/]+)?(?:[\\/])", str(f), re.I)
-        m_cy = re.search(r"(?:^|[\\/])Cyc(\d+)(?:[\\/])", str(f), re.I)
-        if not m_id or not (m_cu or m_cy):
-            print(f"skip (cannot parse): {f}")
-            continue
-        cell = int(m_id.group(1))
-        d = load_fields(f)
-        if "Time" not in d or "I" not in d:
-            print(f"skip (missing Time/I): {f}")
-            continue
-        d["Time"], unit = to_hours(d["Time"])
-        no_cmd[cell] |= not all(k in d for k in ("Command", "Line", "State"))
-        units[cell].add(unit)
-        st = throughput_stats(d)
-        if m_cu:
-            n = int(m_cu.group(1))
-            caps, prev = cu[cell].get(n, ([], None))
-            cap, n_found = checkup_capacity(d)
-            cu[cell][n] = (caps + [(cap, n_found)], st if prev is None else add_stats(prev, st))
-        else:
-            n = int(m_cy.group(1))
-            prev = cyc[cell].get(n)      # several files per interval are summed, not overwritten
-            cyc[cell][n] = st if prev is None else add_stats(prev, st)
+    files = sorted(root.rglob("*.mat"))
+
+    print(f"Found {len(files)} MATLAB files")
+
+    # Start conservatively to avoid excessive memory use.
+    n_workers = min(4, os.cpu_count() or 1)
+    print(f"Using {n_workers} parallel workers")
+
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        results = executor.map(process_mat_file, files, chunksize=1)
+
+        for result in results:
+            if result is None:
+                continue
+
+            cell, kind, n, unit, st, cap, n_found, has_cmd = result
+
+            units[cell].add(unit)
+            no_cmd[cell] |= not has_cmd
+
+            if kind == "cu":
+                caps, prev = cu[cell].get(n, ([], None))
+                cu[cell][n] = (
+                    caps + [(cap, n_found)],
+                    st if prev is None
+                    else add_stats(prev, st)
+                )
+
+            else:
+                prev = cyc[cell].get(n)
+                cyc[cell][n] = (
+                    st if prev is None
+                    else add_stats(prev, st)
+                )
 
     for cell in sorted(set(cu) | set(cyc)):
         cyc_n, cu_n = sorted(cyc[cell]), sorted(cu[cell])

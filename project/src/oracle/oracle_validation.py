@@ -11,11 +11,11 @@ from sklearn.preprocessing import StandardScaler
 from pathlib import Path
 import pandas as pd
 import joblib
+pd.set_option("display.max_colwidth", 75)
 
 
-
-INTERPRETER = "MLP"
-DATA_ROOT = Path(f"/work3/s214728/battery-predictions/models/{INTERPRETER}_models")
+INTERPRETER = "sbi"
+DATA_ROOT = Path(f"/work3/s214728/battery-predictions/models/inference_results/")
 METADATA_ROOT = Path("/work3/claho/battery_datasets/processed")
 OUT_DIR = Path(f"work3/claho/battery_models/oracle/{INTERPRETER.lower()}/")
 
@@ -30,9 +30,11 @@ def load_metadata(
 
     # Generate consistent group IDs
     df_all["group_id"] = pd.factorize(df_all["operational_cluster"])[0]
+    df_cleaned["group_id"] = pd.factorize(df_cleaned["operational_cluster"])[0]
+
 
     # Split into training and testing
-    train_df = df_all[df_all["cell_id"].isin(df_cleaned["cell_id"])].copy()
+    train_df = df_cleaned
     test_df = df_all[~df_all["cell_id"].isin(df_cleaned["cell_id"])].copy()
 
     # Convert to desired format
@@ -122,9 +124,15 @@ def train_oracle(metadata_train: pd.DataFrame,
     )
     
     feature_columns = feature_data_train.columns.drop("cell_id").tolist()
+    nan_columns = ["cell_id", "D_s_n [m2/s]_physical", "k_p [(A/m2)(mol/m3)^(-1.5)]_physical"]
 
 
     scaler_features = StandardScaler()
+    #print(train_data.loc[(train_data[nan_columns] == np.inf).any(axis=1), "cell_id"])
+
+    #print(np.isinf(train_data[nan_columns]).sum())
+
+
     scaler_features.fit(train_data[feature_columns])
 
     train_data[feature_columns] = scaler_features.transform(train_data[feature_columns])
@@ -252,9 +260,7 @@ def train_oracle(metadata_train: pd.DataFrame,
     df_eval['loss'] = np.abs(df_eval['cycle_life'] - df_eval['predicted_cycle_life']) / df_eval['cycle_life']
     if remove_outliers:
         df_eval = df_eval[df_eval['loss'] < 15]
-    outliers = df_eval[df_eval['loss'] > 1]
-    if save_outputs:
-        print(f"Outliers:\n {outliers}")
+
     mape = df_eval['loss'].mean() * 100
 
     # Calculate Group-Level Metrics via pandas groupby
@@ -264,6 +270,9 @@ def train_oracle(metadata_train: pd.DataFrame,
 
 
     if save_outputs:
+        outliers = df_eval[df_eval['loss'] > 1]
+        print(f"Outliers:\n {outliers}")
+
         # Save models
         OUT_DIR.mkdir(parents=True, exist_ok=True)
         joblib.dump(scaler_X, OUT_DIR/"scaler_X.pkl") 
@@ -336,11 +345,13 @@ def main():
     feature_data = load_feature_data(
         "experimental_inference.csv" if INTERPRETER == "SBI" else mlp_filename
     )
-
+    
 
     data = metadata_train.merge(
         feature_data, on="cell_id", how="inner", validate="one_to_one"
     ).reset_index(drop=True)
+
+    print(f"{metadata_train.shape=}, {feature_data.shape=}, {data.shape=}")
 
     group_stats = (
         data.groupby("group_id")

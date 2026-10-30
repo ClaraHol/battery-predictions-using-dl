@@ -1,10 +1,10 @@
 #BSUB -J Process_cells
 #BSUB -o outputs/Process_cells_%J_%I.out
 #BSUB -e outputs/Process_cells_%J_%I.err
-#BSUB -n 1
+#BSUB -n 8
 #BSUB -R "span[hosts=1]"
 #BSUB -q hpc
-#BSUB -W 00:30
+#BSUB -W 01:30
 #BSUB -R "rusage[mem=8GB]"
 #BSUB -M 8GB
 

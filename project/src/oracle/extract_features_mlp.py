@@ -19,6 +19,7 @@ from derived_features import add_derived_features
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+
 DATA_DIR = Path("/work3/claho/battery_datasets/processed")
 MODEL_DIR = PROJECT_ROOT / "models" / "MLP_models"
 OUTPUT = PROJECT_ROOT / "models" / "inference_results" / "experimental_inference_mlp.csv"

@@ -13,9 +13,8 @@ import pandas as pd
 import joblib
 
 
-
-INTERPRETER = "MLP"
-DATA_ROOT = Path(f"/work3/s214728/battery-predictions/models/{INTERPRETER}_models")
+INTERPRETER = "mlp"
+DATA_ROOT = Path(f"/work3/s214728/battery-predictions/models/inference_results/")
 METADATA_ROOT = Path("/work3/claho/battery_datasets/processed")
 OUT_DIR = Path(f"work3/claho/battery_models/oracle/{INTERPRETER.lower()}/")
 
@@ -242,7 +241,7 @@ def train_oracle(metadata_train: pd.DataFrame,
     df_eval['loss'] = np.abs(df_eval['cycle_life'] - df_eval['predicted_cycle_life']) / df_eval['cycle_life']
     if remove_outliers:
         df_eval = df_eval[df_eval['loss'] < 15]
-    outliers = df_eval[df_eval['loss'] > 1]
+    outliers = df_eval[df_eval['loss'] > 0.5]
     print(f"Outliers:\n {outliers}")
     mape = df_eval['loss'].mean() * 100
 

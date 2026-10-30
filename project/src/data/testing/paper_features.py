@@ -2,7 +2,7 @@ import numpy as np
 from pathlib import Path
 from cleaned_battery_features import generate_data_list_group_mape
 
-DATA_ROOT = Path(f"/work3/claho/battery_datasets/raw_feature_data")
+DATA_ROOT = Path(f"/work3/claho/battery_datasets/pouch_cells/raw_feature_data")
 
 (
     train_coordinates,
@@ -14,5 +14,5 @@ DATA_ROOT = Path(f"/work3/claho/battery_datasets/raw_feature_data")
 ) = generate_data_list_group_mape(efc=0)
 
 print(f"groups: {train_groups[0].shape}, metadata: {train_coordinates[0].shape}, features: {train_features[0].shape}, label: {train_labels[0].shape}")
-print(train_groups[0])
-print(train_labels[0])
+print(np.unique(np.array(train_coordinates), axis=1))
+

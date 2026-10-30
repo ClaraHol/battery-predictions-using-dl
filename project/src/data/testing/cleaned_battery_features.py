@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 
 
-DEFAULT_DATA_DIR = Path('/work3/claho/battery_datasets/raw_feature_data')
+DEFAULT_DATA_DIR = Path('/work3/claho/battery_datasets/pouch_cells/raw_feature_data')
 DATA_FILES = {
     'test': 'test_data_efc{efc}_37groups.npy',
     'tongji': 'data_25r_efc{efc}.npy',
@@ -121,7 +121,8 @@ def _cluster(reduced, labels, temperatures, *, training, filter_rates):
         if filter_rates:
             valid = ((np.abs(charge) >= 0.001)
                      & (np.abs(discharge) >= 0.001)
-                     & (np.abs(discharge) <= 10))
+                     & (np.abs(discharge) <= 10)
+                     & (np.abs(charge) <= 10))
             x, y = x[valid], y[valid]
             charge, discharge = charge[valid], discharge[valid]
         if not len(x):

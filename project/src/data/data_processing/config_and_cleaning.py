@@ -50,16 +50,14 @@ EOL_FRACTION_OF_INITIAL = 0.90
 MIN_CYCLE_LIFE = 70
 MAX_C_RATE = 10.0
 
-# Rounding grid for the "operational condition" cluster coordinate, taken
-# directly from the capsule's data_preparation_k_fold.py:
+# Rounding grid for the "operational condition" cluster coordinate
 #   temperature -> nearest 5 degrees C
 #   charge/discharge C-rate -> nearest 0.5 C
 TEMP_ROUND_TO = 5.0
 CRATE_ROUND_TO = 0.5
 
-MIN_CLUSTER_SIZE = (
-    6  # clusters with <= this many cells are dropped (paper: "six or fewer")
-)
+MIN_CLUSTER_SIZE = 6  # clusters with <= this many cells are dropped (paper: "six or fewer")
+                    
 
 
 def round_to_grid(value, grid):
@@ -148,81 +146,80 @@ def compute_cc_c_rate(df: pd.DataFrame, nominal_capacity_Ah: float, direction: s
         return 0.0
     return float(np.median(per_cycle)) / nominal_capacity_Ah
 
-def compute_cycle_life_efc(df, discharge_capacity_by_cycle: pd.Series,
-                              nominal_capacity_Ah: float,
-                              efc_by_cycle: pd.Series,
-                              window: int = 5, n_reference: int = 5,
-                              min_fraction_of_nominal: float = 0.5,
-                              eol_fraction: float = 0.9,
-                              interpolate: bool = True) -> dict:
+def compute_cycle_life_efc(
+    df,
+    discharge_capacity_by_cycle: pd.Series,
+    nominal_capacity_Ah: float,
+    efc_by_cycle: pd.Series,
+    n_reference: int = 5,
+    min_fraction_of_nominal: float = 0.5,
+    eol_fraction: float = 0.9,
+    interpolate: bool = True
+) -> dict:
+
     s = discharge_capacity_by_cycle.dropna().sort_index()
+
     s = s[s >= min_fraction_of_nominal * nominal_capacity_Ah]
+
     if len(s) == 0:
         raise ValueError("No full-capacity cycles found - cannot compute cycle life")
 
-    # EFC for each retained cycle (computed before filtering, so partial cycles still count)
+    # EFC for each retained cycle
     efc = efc_by_cycle.reindex(s.index)
+
     if efc.isna().any():
         raise ValueError("efc_by_cycle is missing entries for some full cycles")
 
-    reference = float(s.iloc[:n_reference].median())
-    thresh = eol_fraction * reference
-    below = s[s <= thresh]
-    censored = len(below) == 0
+    # Create standardized caps
+    caps = pd.DataFrame({
+        "rpt_id": np.arange(len(s)),
+        "cycle_number": s.index.to_numpy(),
+        "capacity_Ah": s.to_numpy(float),
+        "efc": efc.to_numpy(float)
+    })
 
-    if censored:
-        life_efc = float(efc.iloc[-1])            # lower bound
-        life_cycle = int(s.index[-1])
+    # Preserve original row positions
+    positions = pd.DataFrame({"cycle_number": df["cycle_number"].to_numpy(), "_row": np.arange(len(df))})
+
+    # Identify row boundaries of each cycle
+    boundaries = (
+        positions.groupby("cycle_number")["_row"]
+        .agg( charge_start_idx="min", charge_end_idx="max")
+        .reset_index()
+    )
+
+    caps = caps.merge(boundaries, on="cycle_number", how="left", validate="one_to_one")
+
+    # These boundaries describe the complete cycle.
+    # extract_charging_curve() isolates charging and removes CV.
+    if caps[["charge_start_idx", "charge_end_idx"]].isna().any().any():
+        raise ValueError("Missing cycle boundaries")
+
+    caps["charge_start_idx"] = (caps["charge_start_idx"].astype(int))
+    caps["charge_end_idx"] = (caps["charge_end_idx"].astype(int))
+
+    # -------- Cycle life --------
+    ref = float(caps["capacity_Ah"].iloc[:n_reference].median())
+    thresh = eol_fraction * ref
+    below = np.flatnonzero(caps["capacity_Ah"].to_numpy() <= thresh)
+    n_full = int(len(caps))
+
+    if len(below) == 0:
+        return dict(cycle_life=float(efc_by_cycle.max()), censored=True, n_full_cycles=n_full, reference_Ah=ref, caps=caps)
+
+    i = int(below[0])
+
+    if i == 0 or not interpolate:
+        life = float(caps["efc"].iloc[i])
+
     else:
-        life_cycle = int(below.index[0])
-        pos = s.index.get_loc(life_cycle)
-        life_efc = float(efc.iloc[pos])
-        if interpolate and pos > 0:               # linear crossing between bracketing points
-            c0, c1 = s.iloc[pos - 1], s.iloc[pos]
-            if c0 > thresh >= c1:
-                frac = (c0 - thresh) / (c0 - c1)
-                life_efc = float(efc.iloc[pos - 1] + frac * (efc.iloc[pos] - efc.iloc[pos - 1]))
+        c0 = caps.iloc[i - 1]
+        c1 = caps.iloc[i]
 
-    return {"cycle_life_efc": life_efc, "cycle_life": life_cycle, "censored": censored,
-            "reference_capacity_Ah": reference, "n_full_cycles": int(len(s))}
+        frac = (c0.capacity_Ah - thresh) / (c0.capacity_Ah - c1.capacity_Ah)
+        life = float(c0.efc + frac * (c1.efc - c0.efc))
 
-
-def compute_cycle_life_robust(df: pd.DataFrame, discharge_capacity_by_cycle: pd.Series,
-                               nominal_capacity_Ah: float,
-                               window: int = 5, n_reference: int = 5,
-                               min_fraction_of_nominal: float = 0.5) -> dict:
-    """
-    Cycle life for NOISY per-cycle capacity data (per-cycle max discharge
-    Ah from continuous cycling logs). The simple compute_cycle_life()
-    compares every single cycle to iloc[0], which fails two ways on real
-    data: a partial first cycle (fresh cell, 0.83 Ah vs ~3.3 Ah full) gives
-    a wrong reference, and any single interrupted/partial cycle ends the
-    cell's life immediately.
- 
-    Steps:
-      1. Keep only 'full' cycles: capacity >= min_fraction_of_nominal *
-         nominal. Drops partial, interrupted and formation cycles.
-      2. Reference = median of the first n_reference full cycles.
-      3. Smooth with a centered rolling median (window cycles - centered so it adds no lag).
-      4. Life = first cycle_number where the smoothed capacity is at or
-         below EOL_FRACTION_OF_INITIAL * reference.
- 
-    Returns {'cycle_life': int, 'censored': bool, 'reference_capacity_Ah': float,
-             'n_full_cycles': int}. censored=True means the cell never
-    crossed the threshold in the recorded data, so cycle_life is only a
-    lower bound (its last recorded full cycle).
-    """
-    s = discharge_capacity_by_cycle.dropna().sort_index()
-    s = s[s >= min_fraction_of_nominal * nominal_capacity_Ah]
-    if len(s) == 0:
-        raise ValueError("No full-capacity cycles found - cannot compute cycle life")
-    reference = float(s.iloc[:n_reference].median())
-    smoothed = s.rolling(window, center=True, min_periods=1).median()
-    below = smoothed[smoothed <= EOL_FRACTION_OF_INITIAL * reference]
-    censored = len(below) == 0
-    life = int(s.index[-1]) if censored else int(below.index[0])
-    return {"cycle_life": life, "censored": censored,
-            "reference_capacity_Ah": reference, "n_full_cycles": int(len(s))}
+    return dict(cycle_life=life, censored=False, n_full_cycles=n_full, reference_Ah=ref, caps=caps)
 
 
 def calculate_efc(df, q_nom, reset_threshold=0.1, cell_id = None):
@@ -276,153 +273,6 @@ def build_cell_record(
         "cycle_life": int(cycle_life),
         "initial_discharge_capacity_Ah": float(initial_discharge_capacity_Ah),
     }
-
-
-def find_capacity_checks(cell_df: pd.DataFrame, nominal_capacity_Ah: float,
-                          min_fraction_of_nominal: float = 0.8,
-                          outlier_fraction_of_nominal: float = 1.2) -> tuple:
-    """
-    cell_df: must contain cycle_number, discharge_capacity_Ah
-    nominal_capacity_Ah: from config_and_cleaning.NOMINAL_CAPACITY_AH,
-        keyed by chemistry (snl_lfp=1.1, snl_nca=3.2, snl_nmc=3.0)
-    min_fraction_of_nominal: a cycle counts as a capacity-check candidate
-        if ah_d >= this * nominal. Default 0.75 gives margin down to deep
-        end-of-life (the paper's own stopping criterion is 80% of INITIAL
-        capacity, close to but not identical to nominal) while staying
-        far above the ~0.5x-nominal DOD-restricted normal-cycling baseline
-        seen in real data, so there's no risk of normal cycling leaking in.
-    outlier_fraction_of_nominal: within a detected block, any row whose
-        ah_d exceeds this * nominal is physically implausible as a single-
-        cycle discharge reading (confirmed: 1.45 Ah on a 1.1 Ah nominal
-        cell) and is excluded from the reported capacity, not averaged in.
- 
-    Returns (checks, df):
-      checks: one row per block - capacity_check_id, first_cycle,
-              last_cycle, n_cycles, capacity_Ah, n_outliers_excluded
-      df: original data with capacity_check / capacity_check_id columns added
-    """
-    df = cell_df.sort_values("cycle_number").reset_index(drop=True).copy()
-    df = calculate_efc(df, q_nom=nominal_capacity_Ah, cell_id="snl")
- 
-    is_candidate = df["discharge_capacity_Ah"] >= min_fraction_of_nominal * nominal_capacity_Ah
- 
-    # new block whenever we leave a candidate run OR cycle_index isn't
-    # contiguous (a gap in the data shouldn't silently merge two blocks)
-    block_break = (~is_candidate) | (df["cycle_number"].diff() != 1)
-    block_id_raw = block_break.cumsum()
- 
-    df["capacity_check"] = is_candidate
-    df["capacity_check_id"] = np.where(is_candidate, block_id_raw, np.nan)
- 
-    def _agg(g):
-        non_outlier = g[g["discharge_capacity_Ah"] <= outlier_fraction_of_nominal * nominal_capacity_Ah]
-        capacity = non_outlier["discharge_capacity_Ah"].max() if len(non_outlier) else g["discharge_capacity_Ah"].median()
-        return pd.Series({
-            "first_cycle": g["cycle_number"].min(),
-            "last_cycle": g["cycle_number"].max(),
-            "n_cycles": len(g),
-            "capacity_Ah": capacity,
-            "n_outliers_excluded": len(g) - len(non_outlier),
-            "EFC": g["EFC"].max()
-        })
- 
-    checks = (
-        df[df["capacity_check"]]
-        .groupby("capacity_check_id")
-        .apply(_agg, include_groups=False)
-        .reset_index()
-        .rename(columns={"capacity_check_id": "capacity_check_id"})
-    )
-    checks["capacity_check_id"] = range(len(checks))  # renumber 0..N contiguously
-    # re-sync the id back onto df to match the renumbering above
-    id_map = dict(zip(sorted(df["capacity_check_id"].dropna().unique()), checks["capacity_check_id"]))
-    df["capacity_check_id"] = df["capacity_check_id"].map(id_map)
- 
-    return checks, df
-
-def find_capacity_checks_old(cell_df, min_jump_ratio=1.15):
-    """
-    Identify the 3-cycle capacity-check blocks in one cell.
-
-    Parameters
-    ----------
-    cell_df : pd.DataFrame
-        Must contain: cycle_index, ah_d
-    min_jump_ratio : float
-        Minimum ratio between the first cycle of a capacity-check block
-        and the preceding normal-cycle capacity.
-
-    Returns
-    -------
-    checks : pd.DataFrame
-        One row per capacity-check block.
-    df : pd.DataFrame
-        Original data with capacity-check information added.
-    """
-
-    df = cell_df.sort_values("cycle_index").copy()
-
-    # Difference/ratio between consecutive cycles
-    df["ah_d_prev"] = df["ah_d"].shift(1)
-    df["ah_d_ratio"] = df["ah_d"] / df["ah_d_prev"]
-
-    # A capacity check starts when ah_d jumps substantially
-    # relative to the preceding normal cycling value.
-    starts = df.index[
-        df["ah_d_ratio"] >= min_jump_ratio
-    ]
-
-    check_blocks = []
-
-    for start_idx in starts:
-        pos = df.index.get_loc(start_idx)
-
-        # Need 3 consecutive rows/cycles
-        if pos + 2 >= len(df):
-            continue
-
-        block = df.iloc[pos:pos + 3]
-
-        # Make sure the cycle indices really are consecutive
-        if (
-            block["cycle_index"].diff().iloc[1:] == 1
-        ).all():
-
-            check_blocks.append(block.index.tolist())
-
-    # Remove duplicate/overlapping detections
-    unique_blocks = []
-    used = set()
-
-    for block in check_blocks:
-        if not any(i in used for i in block):
-            unique_blocks.append(block)
-            used.update(block)
-
-    # Mark capacity-check cycles
-    df["capacity_check"] = False
-    df["capacity_check_id"] = np.nan
-
-    for check_id, block in enumerate(unique_blocks):
-        df.loc[block, "capacity_check"] = True
-        df.loc[block, "capacity_check_id"] = check_id
-
-    # One capacity value per capacity-check block
-    checks = (
-        df[df["capacity_check"]]
-        .groupby("capacity_check_id")
-        .agg(
-            first_cycle=("cycle_index", "min"),
-            last_cycle=("cycle_index", "max"),
-            capacity_Ah=("ah_d", "mean"),
-        )
-        .reset_index()
-    )
-
-    return checks, df
-
-
-
 
 def apply_three_step_cleaning(
     cells_df: pd.DataFrame, verbose: bool = True

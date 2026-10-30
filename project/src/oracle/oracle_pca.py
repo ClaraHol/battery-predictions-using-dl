@@ -17,7 +17,7 @@ import joblib
 
 
 
-INTERPRETER = "PCA"
+INTERPRETER = "sbi"
 DATA_ROOT = Path(f"/work3/s214728/battery-predictions/models/inference_results/")
 METADATA_ROOT = Path("/work3/claho/battery_datasets/processed")
 OUT_DIR = Path(f"work3/claho/battery_models/oracle/{INTERPRETER.lower()}/")
@@ -54,7 +54,6 @@ def load_metadata(
 
 def load_feature_data(filename: str = "experimental_inference.csv"):
     df = pd.read_csv(DATA_ROOT / filename)
-    
     efc0 = df[df["curve_type"] == "efc0"].set_index("cell_id")
     efc50 = df[df["curve_type"] == "efc50"].set_index("cell_id")
 
@@ -63,7 +62,7 @@ def load_feature_data(filename: str = "experimental_inference.csv"):
     assert efc50.index.is_unique, "Duplicate cell IDs at EFC 50"
 
     # Only extract the physical features not normalized features
-    feature_columns = [f for f in efc0.columns if "PC" in f]
+    feature_columns = [f for f in efc0.columns if "feature" in f]
 
     # Keep only numerical features
     features = efc0[feature_columns].select_dtypes(include="number").columns
@@ -207,7 +206,6 @@ def train_oracle(metadata_train: pd.DataFrame,
     )
     
     feature_columns = feature_data_train.columns.drop("cell_id").tolist()
-
 
     scaler_features = StandardScaler()
     scaler_features.fit(train_data[feature_columns])
@@ -355,11 +353,8 @@ def train_oracle(metadata_train: pd.DataFrame,
     return mape, group_mape
 
 def train_simple_oracle(data, feature_columns):
-    X = data[
-            feature_columns +
-            ["temp", "Chrg-rate", "Dchrg-rate"]
-        ].to_numpy()
     
+    X = data[feature_columns +["temp", "Chrg-rate", "Dchrg-rate"]].to_numpy()
     y = data["cycle_life"].to_numpy()
 
     loo = LeaveOneOut()
@@ -374,10 +369,7 @@ def train_simple_oracle(data, feature_columns):
         )
 
         model.fit(X[train_idx], np.log(y[train_idx]))
-
-        predictions[test_idx] = np.exp(
-            model.predict(X[test_idx])
-        )
+        predictions[test_idx] = np.exp(model.predict(X[test_idx]))
 
     data["prediction"] = predictions
     
@@ -386,12 +378,16 @@ def train_simple_oracle(data, feature_columns):
     mape, group_mape, df_eval, df_group = compute_mape(df_eval)
 
 
-    plot_mape(df_eval, mape, out_name=f"project/reports/figures/oracle/simple_oracle_mape_{INTERPRETER.lower()}.png")
+    plot_mape(df_eval, mape, out_name=f"project/reports/figures/simple_oracle/mape_{INTERPRETER.lower()}.png")
     #plot_mape(df_group, group_mape, out_name=f"project/reports/figures/oracle/simple_oracle_group_mape_{INTERPRETER.lower()}.png")
 
     data["ape"] = (
         100 * np.abs(data["cycle_life"] - data["prediction"])
         / data["cycle_life"]
+    )
+    group_mape = (
+        data.groupby("group_id")["ape"]
+        .mean()
     )
 
     print(group_mape)
@@ -399,11 +395,10 @@ def train_simple_oracle(data, feature_columns):
 
     overall_mape = data["ape"].mean()
 
-    group1_mape = data.loc[data["group_id"] == 1, "ape"].mean()
+    group1_mape = data.loc[data["group_id"] == 8, "ape"].mean()
 
-    without_group1 = data.loc[data["group_id"] != 1, "ape"].mean()
-
-    group1 =  data.loc[data["group_id"] == 1]
+    without_group1 = data.loc[data["group_id"] != 8, "ape"].mean()
+    group1 =  data.loc[data["group_id"] == 8]
     group1_features = group1[feature_columns]
 
     knn_analysis(group1, group1_features)
@@ -490,17 +485,25 @@ def loo_validation(data, meta_columns, feature_columns):
 
 def main():
     """Leave-one-cell-out CV on the cleaned training dataset."""
-    pca_filename = "experimental_inference_PCA.csv"
+
 
     # Load only once; the original metadata_test is not used for CV.
     metadata_train, _ = load_metadata()
-    feature_data = load_feature_data("experimental_inference.csv" if INTERPRETER == "SBI" else pca_filename)
+    feature_data = load_feature_data(f"experimental_inference_{INTERPRETER}.csv")
 
     data = metadata_train.merge(feature_data, on="cell_id", how="inner", validate="one_to_one").reset_index(drop=True)
 
     group_stats = (
-        data.groupby("group_id")
+        data.assign(
+            op_cond=list(zip(
+                data["temp"],
+                data["Chrg-rate"],
+                data["Dchrg-rate"]
+            ))
+        )
+        .groupby("group_id")
         .agg(
+            operation_conditions=("op_cond", "first"),
             n_cells=("cycle_life", "size"),
             mean_life=("cycle_life", "mean"),
             std_life=("cycle_life", "std"),

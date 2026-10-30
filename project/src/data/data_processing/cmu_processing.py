@@ -83,17 +83,58 @@ def per_block_table(df, max_dt_s=30.0, discharge_sign=1):
     return out
 
 
+def add_cmu_rpt_boundaries(df, caps):
+    """
+    Convert CMU RPT block identifiers into positional
+    boundaries compatible with extract_rpt_curves().
+
+    Boundaries cover the full RPT block; charging
+    and CV removal happen during curve extraction.
+    """
+    labeled = label_cmu_blocks(df)
+
+    positions = labeled.reset_index(drop=True).copy()
+    positions["_row"] = np.arange(len(positions))
+
+    boundaries = (
+        positions[positions["is_capacity"]]
+        .groupby("block")["_row"]
+        .agg(discharge_start_idx="min", discharge_end_idx="max")
+        .reset_index()
+    )
+
+    if "block" not in caps.columns:
+        raise ValueError("CMU caps must retain the selected RPT block")
+
+    caps = caps.merge(boundaries, on="block", how="left", validate="many_to_one")
+
+    return caps
+
+
 def cmu_cycle_life_efc(df, nominal_Ah=3.0, eol=0.9, min_frac=0.8,
                        outlier_frac=1.2, n_ref=1):
-    blocks = per_block_table(label_cmu_blocks(df))
 
+    blocks = per_block_table(label_cmu_blocks(df), discharge_sign=-1)
     caps = blocks[blocks.is_capacity &
                   (blocks.discharge_Ah >= min_frac * nominal_Ah) &
                   (blocks.discharge_Ah <= outlier_frac * nominal_Ah)].copy()
-    caps = (caps.groupby("mission_cycle", as_index=False)
-                .agg(capacity_Ah=("discharge_Ah", "max"),
-                     efc=("efc_start", "min")))   # EFC accumulated before the test
-    caps = caps.sort_values("efc").reset_index(drop=True)
+    # Keep the RPT block that produced the largest valid capacity
+    best_idx = caps.groupby("mission_cycle")["discharge_Ah"].idxmax()
+
+    caps = (
+        caps.loc[
+            best_idx,
+            ["block", "mission_cycle", "discharge_Ah", "efc_start"]
+        ]
+        .rename(columns={
+            "discharge_Ah": "capacity_Ah",
+            "efc_start": "efc"
+        })
+        .sort_values("efc")
+        .reset_index(drop=True)
+    )
+
+    
 
     ref = caps["capacity_Ah"].iloc[:n_ref].median()
     thresh = eol * ref
@@ -114,31 +155,3 @@ def cmu_cycle_life_efc(df, nominal_Ah=3.0, eol=0.9, min_frac=0.8,
     return dict(cycle_life=float(life), censored=False, n_full_cycles = int(blocks.efc_end.max()),
                 reference_Ah=ref, caps=caps)
 
-def cmu_cycle_life(df, nominal_Ah=3.0, eol=0.9, min_frac=0.8,
-                   outlier_frac=1.2, n_ref=3):
-    blocks = per_block_table(label_cmu_blocks(df))
-    
-    caps = blocks[blocks.is_capacity &
-                (blocks.discharge_Ah >= min_frac * nominal_Ah) &
-                (blocks.discharge_Ah <= outlier_frac * nominal_Ah)].copy()
-
-    # collapse back-to-back tests (VAH25, VAH28) that share a mission_cycle
-    caps = (caps.groupby("mission_cycle", as_index=False)
-                .agg(capacity_Ah=("discharge_Ah", "max"), t_start=("t_start", "min")))
-
-    ref = caps["capacity_Ah"].iloc[:n_ref].median()
-    thresh = eol * ref
-    below = caps[caps["capacity_Ah"] <= thresh]
-
-    if below.empty:
-        return dict(cycle_life=None, censored=True,
-                    reference_Ah=ref, caps=caps, n_full_cycles=int(blocks.mission_cycle.max()))
-
-    i = below.index[0]
-    if i == caps.index[0]:
-        life = int(caps.loc[i, "mission_cycle"])
-    else:                                              # interpolate between bracketing tests
-        c0, c1 = caps.loc[i - 1], caps.loc[i]
-        frac = (c0.capacity_Ah - thresh) / (c0.capacity_Ah - c1.capacity_Ah)
-        life = int(round(c0.mission_cycle + frac * (c1.mission_cycle - c0.mission_cycle)))
-    return dict(cycle_life=life, censored=False, reference_Ah=ref, caps=caps, n_full_cycles=int(blocks.efc_end.max()))

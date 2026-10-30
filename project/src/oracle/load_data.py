@@ -91,11 +91,12 @@ fig.savefig(out_dir / "lower_curves_efc50_cells.png")
 plt.close(fig)
 
 
+
 selected_cell_ids = [
-    "tum_BW-VTC-234",
-    "tum_BW-VTC-221",
-    "tum_BW-VTC-431",
-    "snl_nmc_SNL_18650_NMC_25C_0-100_0.5/2C_b",
+    "tum_BW-VTC-401",
+    "tum_BW-VTC-288",
+    "tum_BW-VTC-365",
+    "tum_BW-VTC-362",
 ]
 
 fig, axes = plt.subplots(2, 2, figsize=(12, 8))
