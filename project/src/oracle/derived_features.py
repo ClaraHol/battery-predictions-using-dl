@@ -15,6 +15,7 @@ REQUIRED = (
     "eps_s_n_physical",
     "eps_s_p_physical",
 )
+DIRECTIONS = {"charge", "discharge"}
 
 
 def chemistry_constants(chemistry):
@@ -44,17 +45,39 @@ def add_derived_features(results):
     """Return a copy of the EFC0/EFC50 inference dataframe with 3 new columns.
 
     Computes derived features *after* the EFC50 lower/upper estimates have
-    already been interpolated. No output is clipped.
+    already been interpolated. The conversion depends on the direction of the
+    reference-performance-test curve used to train the MLP:
+
+    * ``charge`` models infer the fully discharged stoichiometries
+      (theta_l_n/theta_l_p), so the fully charged stoichiometries are obtained
+      by adding/subtracting the charge-capacity increment.
+    * ``discharge`` models infer the fully charged stoichiometries
+      (theta_h_n/theta_h_p), so the fully discharged stoichiometries are first
+      obtained by subtracting/adding the discharge-capacity increment.
+
+    The output is not clipped.
     """
-    missing = [col for col in ("chemistry", *REQUIRED) if col not in results]
+    missing = [col for col in ("chemistry", "direction", *REQUIRED) if col not in results]
     if missing:
         raise ValueError(
             f"Cannot derive features; missing columns {missing}. "
-            "The model must output physical stoichiometries and volume fractions."
+            "The model must output physical stoichiometries and volume fractions, "
+            "and the inference direction must be specified as 'charge' or 'discharge'."
         )
 
     df = results.copy()
-    for chemistry, indices in df.groupby("chemistry").groups.items():
+    directions = df["direction"].astype(str).str.lower()
+    invalid_directions = sorted(set(directions) - DIRECTIONS)
+    if invalid_directions:
+        raise ValueError(
+            f"Cannot derive features; invalid inference direction(s) {invalid_directions}. "
+            "Expected 'charge' or 'discharge'."
+        )
+    df["direction"] = directions
+
+    for (chemistry, direction), indices in df.groupby(
+        ["chemistry", "direction"], sort=False
+    ).groups.items():
         q, ln, lp, area, cn, cp = chemistry_constants(chemistry)
         group = df.loc[indices]
 
@@ -71,8 +94,26 @@ def add_derived_features(results):
                 f"{chemistry}: inferred active material fractions must be > 0"
             )
 
-        df.loc[indices, "theta_h_n_physical"] = tn + q / (ln * area * cn * en * FARADAY)
-        df.loc[indices, "theta_h_p_physical"] = tp - q / (lp * area * cp * ep * FARADAY)
-        df.loc[indices, "theta_off_physical"] = tp + tn * (ln * cn * en) / (lp * cp * ep)
+        delta_n = q / (ln * area * cn * en * FARADAY)
+        delta_p = q / (lp * area * cp * ep * FARADAY)
+
+        if direction == "charge":
+            # theta_n_init/theta_p_init are theta_l_n/theta_l_p.
+            theta_l_n = tn
+            theta_l_p = tp
+            theta_h_n = theta_l_n + delta_n
+            theta_h_p = theta_l_p - delta_p
+        else:
+            # theta_n_init/theta_p_init are theta_h_n/theta_h_p.
+            theta_h_n = tn
+            theta_h_p = tp
+            theta_l_n = theta_h_n - delta_n
+            theta_l_p = theta_h_p + delta_p
+
+        df.loc[indices, "theta_h_n_physical"] = theta_h_n
+        df.loc[indices, "theta_h_p_physical"] = theta_h_p
+        df.loc[indices, "theta_off_physical"] = (
+            theta_l_p + theta_l_n * (ln * cn * en) / (lp * cp * ep)
+        )
 
     return df

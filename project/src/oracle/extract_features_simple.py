@@ -345,12 +345,12 @@ if __name__ == "__main__":
     )
     print("Attempting inference")
     early = run_inference_efc0(efc0, models, "efc0")
-    print(early_results)
+    # print(early_results)
     print("Infernce for efc0 completed, starting efc50")
     late = run_inference_efc50(efc50, models, "efc50")
     print("Inference for efc50 completed")
 
-    print(f"Unique early result IDs: {early_results['cell_id'].nunique()}")
+    # print(f"Unique early result IDs: {early_results['cell_id'].nunique()}")
     
     results = pd.concat([early, late], ignore_index=True)
     results = add_derived_features(results)

@@ -93,21 +93,44 @@ plt.close(fig)
 
 
 selected_cell_ids = [
+<<<<<<< HEAD
     "tum_BW-VTC-401",
     "tum_BW-VTC-288",
     "tum_BW-VTC-365",
     "tum_BW-VTC-362",
+=======
+    "tum_BW-VTC-280",
+    "tum_BW-VTC-282",
+    "tum_BW-VTC-283",
+    "tum_BW-VTC-284",
+>>>>>>> 736ca64084c1619827cc3bbfa4640445e4937c94
 ]
 
 fig, axes = plt.subplots(2, 2, figsize=(12, 8))
 for ax, cell_id in zip(axes.flat, selected_cell_ids):
-    cell_data = efc50[efc50["cell_id"] == cell_id]
-    voltage = cell_data["lower_curve"].to_numpy()
-    time = cell_data["lower_curve_time"].to_numpy()
-    ax.plot(time, voltage)
+    efc0_cell_data = efc0[efc0["cell_id"] == cell_id]
+    efc50_cell_data = efc50[efc50["cell_id"] == cell_id]
+
+    ax.plot(
+        efc50_cell_data["lower_curve_time"].to_numpy(),
+        efc50_cell_data["lower_curve"].to_numpy(),
+        label="efc50_lower",
+    )
+    ax.plot(
+        efc50_cell_data["upper_curve_time"].to_numpy(),
+        efc50_cell_data["upper_curve"].to_numpy(),
+        label="efc50_upper",
+    )
+    ax.plot(
+        efc0_cell_data["time_s"].to_numpy(),
+        efc0_cell_data["early_curve"].to_numpy(),
+        label = "efc0",
+
+    )
     ax.set_xlabel("Time (sample)")
     ax.set_ylabel("Voltage")
     ax.set_title(f"Voltage over time for {cell_id}")
+    ax.legend()
     ax.grid(True)
 fig.tight_layout()
 fig.savefig(out_dir / "time_voltage_selected_cells.png")
